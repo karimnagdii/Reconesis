@@ -1,0 +1,1006 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Reconesis Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0a0e1a;
+      --surface: #111827;
+      --card: #1a2235;
+      --border: #1e2d45;
+      --accent: #3b82f6;
+      --accent2: #6366f1;
+      --green: #10b981;
+      --yellow: #f59e0b;
+      --red: #ef4444;
+      --orange: #f97316;
+      --muted: #64748b;
+      --text: #e2e8f0;
+      --text-dim: #94a3b8;
+      --font: 'Inter', sans-serif;
+      --mono: 'JetBrains Mono', monospace;
+    }
+
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── NAV ── */
+    nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1rem 2rem;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: .6rem;
+      font-size: 1.15rem;
+      font-weight: 700;
+      letter-spacing: .04em;
+    }
+
+    .logo-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1rem;
+    }
+
+    .nav-badge {
+      font-size: .7rem;
+      font-family: var(--mono);
+      background: rgba(59, 130, 246, .15);
+      border: 1px solid rgba(59, 130, 246, .3);
+      color: var(--accent);
+      padding: .2rem .5rem;
+      border-radius: 999px;
+    }
+
+    /* ── LAYOUT ── */
+    main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 340px 1fr;
+      gap: 0;
+    }
+
+    /* ── SIDEBAR ── */
+    .sidebar {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+      overflow-y: auto;
+    }
+
+    .section-title {
+      font-size: .7rem;
+      font-weight: 600;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: .6rem;
+    }
+
+    /* Target input group */
+    .input-group {
+      display: flex;
+      flex-direction: column;
+      gap: .5rem;
+    }
+
+    .input-group label {
+      font-size: .8rem;
+      color: var(--text-dim);
+    }
+
+    .input-group input {
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 8px;
+      padding: .6rem .9rem;
+      font-family: var(--mono);
+      font-size: .85rem;
+      width: 100%;
+      transition: border-color .2s;
+    }
+
+    .input-group input:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    .btn-scan {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: .5rem;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: .75rem 1.2rem;
+      font-family: var(--font);
+      font-size: .9rem;
+      font-weight: 600;
+      cursor: pointer;
+      width: 100%;
+      transition: opacity .2s, transform .1s;
+    }
+
+    .btn-scan:hover:not(:disabled) {
+      opacity: .9;
+    }
+
+    .btn-scan:active:not(:disabled) {
+      transform: scale(.98);
+    }
+
+    .btn-scan:disabled {
+      opacity: .5;
+      cursor: not-allowed;
+    }
+
+    /* Phase stepper */
+    .phase-stepper {
+      display: flex;
+      flex-direction: column;
+      gap: .5rem;
+    }
+
+    .phase-item {
+      display: flex;
+      align-items: center;
+      gap: .75rem;
+      padding: .6rem .8rem;
+      border-radius: 8px;
+      border: 1px solid transparent;
+      transition: all .3s;
+    }
+
+    .phase-item.active {
+      background: rgba(59, 130, 246, .08);
+      border-color: rgba(59, 130, 246, .3);
+    }
+
+    .phase-item.done {
+      background: rgba(16, 185, 129, .06);
+      border-color: rgba(16, 185, 129, .2);
+    }
+
+    .phase-dot {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: .85rem;
+      flex-shrink: 0;
+      background: var(--card);
+      border: 1px solid var(--border);
+      transition: all .3s;
+    }
+
+    .phase-item.active .phase-dot {
+      background: var(--accent);
+      border-color: var(--accent);
+      box-shadow: 0 0 12px rgba(59, 130, 246, .5);
+      animation: pulse 1.5s infinite;
+    }
+
+    .phase-item.done .phase-dot {
+      background: var(--green);
+      border-color: var(--green);
+    }
+
+    .phase-label {
+      font-size: .82rem;
+      font-weight: 500;
+    }
+
+    .phase-sub {
+      font-size: .7rem;
+      color: var(--text-dim);
+      margin-top: .1rem;
+    }
+
+    @keyframes pulse {
+
+      0%,
+      100% {
+        box-shadow: 0 0 12px rgba(59, 130, 246, .5);
+      }
+
+      50% {
+        box-shadow: 0 0 20px rgba(59, 130, 246, .9);
+      }
+    }
+
+    /* Metrics cards */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: .6rem;
+    }
+
+    .metric-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: .75rem;
+    }
+
+    .metric-label {
+      font-size: .65rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .06em;
+    }
+
+    .metric-value {
+      font-size: 1.3rem;
+      font-weight: 700;
+      font-family: var(--mono);
+      margin-top: .2rem;
+      color: var(--accent);
+    }
+
+    .metric-card.critical .metric-value {
+      color: var(--red);
+    }
+
+    /* ── CONTENT AREA ── */
+    .content {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      gap: 0;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 1.5rem;
+    }
+
+    .tab {
+      padding: .85rem 1.1rem;
+      font-size: .82rem;
+      font-weight: 500;
+      color: var(--muted);
+      cursor: pointer;
+      border: none;
+      background: none;
+      border-bottom: 2px solid transparent;
+      transition: color .2s, border-color .2s;
+      display: flex;
+      align-items: center;
+      gap: .4rem;
+    }
+
+    .tab:hover {
+      color: var(--text);
+    }
+
+    .tab.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+
+    .tab-badge {
+      background: var(--card);
+      color: var(--text-dim);
+      font-size: .65rem;
+      font-family: var(--mono);
+      padding: .1rem .35rem;
+      border-radius: 999px;
+    }
+
+    .tab.active .tab-badge {
+      background: rgba(59, 130, 246, .2);
+      color: var(--accent);
+    }
+
+    .tab-panel {
+      display: none;
+      flex: 1;
+      overflow: auto;
+      padding: 1.5rem;
+    }
+
+    .tab-panel.active {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    /* Hosts Table */
+    .hosts-table-wrap {
+      overflow-x: auto;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    thead {
+      background: var(--card);
+    }
+
+    th {
+      padding: .65rem 1rem;
+      text-align: left;
+      font-size: .7rem;
+      font-weight: 600;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    td {
+      padding: .7rem 1rem;
+      border-bottom: 1px solid var(--border);
+      font-size: .82rem;
+      vertical-align: top;
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    tr:hover td {
+      background: rgba(255, 255, 255, .02);
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: .2rem .55rem;
+      border-radius: 999px;
+      font-size: .68rem;
+      font-weight: 600;
+      letter-spacing: .04em;
+    }
+
+    .badge-critical {
+      background: rgba(239, 68, 68, .15);
+      color: var(--red);
+      border: 1px solid rgba(239, 68, 68, .3);
+    }
+
+    .badge-high {
+      background: rgba(249, 115, 22, .15);
+      color: var(--orange);
+      border: 1px solid rgba(249, 115, 22, .3);
+    }
+
+    .badge-medium {
+      background: rgba(245, 158, 11, .12);
+      color: var(--yellow);
+      border: 1px solid rgba(245, 158, 11, .25);
+    }
+
+    .badge-low {
+      background: rgba(100, 116, 139, .1);
+      color: var(--muted);
+      border: 1px solid rgba(100, 116, 139, .2);
+    }
+
+    .badge-unknown {
+      background: rgba(100, 116, 139, .1);
+      color: var(--muted);
+      border: 1px solid rgba(100, 116, 139, .2);
+    }
+
+    .badge-type {
+      background: rgba(99, 102, 241, .12);
+      color: #a5b4fc;
+      border: 1px solid rgba(99, 102, 241, .25);
+    }
+
+    .port-tag {
+      display: inline-block;
+      margin: .1rem;
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      font-family: var(--mono);
+      font-size: .68rem;
+      padding: .1rem .4rem;
+      border-radius: 4px;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 3rem;
+      color: var(--muted);
+      font-size: .85rem;
+    }
+
+    .empty-state .big-icon {
+      font-size: 2.5rem;
+      margin-bottom: .75rem;
+    }
+
+    /* Log Console */
+    #log-console {
+      background: #050a12;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 1.2rem;
+      font-family: var(--mono);
+      font-size: .78rem;
+      line-height: 1.7;
+      height: 100%;
+      min-height: 420px;
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    .log-line {
+      display: flex;
+      gap: .75rem;
+    }
+
+    .log-ts {
+      color: var(--muted);
+      flex-shrink: 0;
+    }
+
+    .log-msg.info {
+      color: #93c5fd;
+    }
+
+    .log-msg.warning {
+      color: var(--yellow);
+    }
+
+    .log-msg.error {
+      color: var(--red);
+    }
+
+    .log-msg.success {
+      color: var(--green);
+    }
+
+    /* Report Panel */
+    #report-content {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.5rem 2rem;
+      font-size: .85rem;
+      line-height: 1.75;
+      flex: 1;
+      white-space: pre-wrap;
+      font-family: var(--font);
+      overflow-y: auto;
+    }
+
+    #report-content h1,
+    #report-content h2,
+    #report-content h3 {
+      color: var(--text);
+      margin: 1.2rem 0 .5rem;
+    }
+
+    #report-content h1 {
+      font-size: 1.3rem;
+    }
+
+    #report-content h2 {
+      font-size: 1.05rem;
+      color: var(--accent);
+    }
+
+    #report-content strong {
+      color: var(--text);
+    }
+
+    #report-content ul {
+      padding-left: 1.5rem;
+    }
+
+    #report-content li {
+      margin-bottom: .3rem;
+    }
+
+    #report-placeholder {
+      text-align: center;
+      color: var(--muted);
+      padding: 4rem;
+    }
+
+    /* Toast */
+    #toast {
+      position: fixed;
+      bottom: 1.5rem;
+      right: 1.5rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: .75rem 1rem;
+      font-size: .82rem;
+      display: none;
+      gap: .5rem;
+      align-items: center;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, .4);
+      z-index: 999;
+    }
+
+    #toast.show {
+      display: flex;
+      animation: slideIn .3s ease;
+    }
+
+    @keyframes slideIn {
+      from {
+        opacity: 0;
+        transform: translateY(10px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: var(--surface);
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 3px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--muted);
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- NAV -->
+  <nav>
+    <div class="logo">
+      <div class="logo-icon">🔍</div>
+      <span>Reconesis</span>
+      <span class="nav-badge">AI Recon Engine</span>
+    </div>
+    <div id="nav-status" style="font-size:.8rem;color:var(--muted)">Idle</div>
+  </nav>
+
+  <!-- MAIN -->
+  <main>
+
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+
+      <!-- Target Input -->
+      <div>
+        <div class="section-title">Scan Target</div>
+        <div class="input-group">
+          <label for="target-input">IP Address or CIDR Range</label>
+          <input id="target-input" type="text" placeholder="e.g. 172.20.0.0/24" value="172.20.0.0/24" />
+        </div>
+        <button id="btn-scan" class="btn-scan" style="margin-top:.75rem" onclick="startScan()">
+          <span>▶</span> Start Scan
+        </button>
+      </div>
+
+      <!-- Phase Stepper -->
+      <div>
+        <div class="section-title">Scan Phases</div>
+        <div class="phase-stepper">
+          <div class="phase-item" id="phase-discovery">
+            <div class="phase-dot">🔭</div>
+            <div>
+              <div class="phase-label">Discovery</div>
+              <div class="phase-sub">Host sweep (ICMP/ARP)</div>
+            </div>
+          </div>
+          <div class="phase-item" id="phase-assessment">
+            <div class="phase-dot">📋</div>
+            <div>
+              <div class="phase-label">Assessment</div>
+              <div class="phase-sub">Port scan & classification</div>
+            </div>
+          </div>
+          <div class="phase-item" id="phase-hunter">
+            <div class="phase-dot">🎯</div>
+            <div>
+              <div class="phase-label">Hunter</div>
+              <div class="phase-sub">Deep scan on critical assets</div>
+            </div>
+          </div>
+          <div class="phase-item" id="phase-reporting">
+            <div class="phase-dot">📝</div>
+            <div>
+              <div class="phase-label">Report</div>
+              <div class="phase-sub">AI analysis & final report</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Metrics -->
+      <div>
+        <div class="section-title">Metrics (Proposal §5)</div>
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div class="metric-label">Total Hosts</div>
+            <div class="metric-value" id="m-total">—</div>
+          </div>
+          <div class="metric-card critical">
+            <div class="metric-label">Critical</div>
+            <div class="metric-value" id="m-critical">—</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Time / Host</div>
+            <div class="metric-value" id="m-time">—</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Scan Depth</div>
+            <div class="metric-value" id="m-depth">—</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Packets Sent</div>
+            <div class="metric-value" id="m-packets">—</div>
+          </div>
+        </div>
+      </div>
+
+    </aside>
+
+    <!-- CONTENT -->
+    <div class="content">
+      <!-- Tabs -->
+      <div class="tabs">
+        <button class="tab active" id="tab-hosts" onclick="switchTab('hosts')">
+          🖥️ Hosts <span class="tab-badge" id="host-count">0</span>
+        </button>
+        <button class="tab" id="tab-log" onclick="switchTab('log')">
+          📟 Live Log <span class="tab-badge" id="log-count">0</span>
+        </button>
+        <button class="tab" id="tab-report" onclick="switchTab('report')">
+          📄 AI Report
+        </button>
+      </div>
+
+      <!-- Hosts Panel -->
+      <div class="tab-panel active" id="panel-hosts">
+        <div class="hosts-table-wrap">
+          <table id="hosts-table">
+            <thead>
+              <tr>
+                <th>IP Address</th>
+                <th>Asset Type</th>
+                <th>Criticality</th>
+                <th>Open Ports</th>
+                <th>Detection Reason</th>
+              </tr>
+            </thead>
+            <tbody id="hosts-tbody">
+              <tr id="empty-row">
+                <td colspan="5">
+                  <div class="empty-state">
+                    <div class="big-icon">🛰️</div>
+                    Start a scan to discover hosts on the network.
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Log Panel -->
+      <div class="tab-panel" id="panel-log">
+        <div id="log-console"><span style="color:var(--muted)"># Log output will appear here...</span></div>
+      </div>
+
+      <!-- Report Panel -->
+      <div class="tab-panel" id="panel-report">
+        <div id="report-placeholder">
+          <div class="empty-state">
+            <div class="big-icon">🤖</div>
+            The AI-generated final report will appear here after the scan completes.
+          </div>
+        </div>
+        <div id="report-content" style="display:none"></div>
+      </div>
+
+    </div>
+  </main>
+
+  <!-- Toast -->
+  <div id="toast"></div>
+
+  <script>
+    // ── STATE ──────────────────────────────────────────────
+    let eventSource = null;
+    let logCount = 0;
+    let hostCount = 0;
+    const hostRows = {};   // ip -> <tr>
+
+    // ── TABS ───────────────────────────────────────────────
+    function switchTab(name) {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      document.getElementById('tab-' + name).classList.add('active');
+      document.getElementById('panel-' + name).classList.add('active');
+    }
+
+    // ── PHASE STEPPER ──────────────────────────────────────
+    const phaseOrder = ['discovery', 'assessment', 'hunter', 'reporting'];
+    function setPhase(phase) {
+      const idx = phaseOrder.indexOf(phase);
+      phaseOrder.forEach((p, i) => {
+        const el = document.getElementById('phase-' + p);
+        el.classList.remove('active', 'done');
+        if (i < idx) el.classList.add('done');
+        else if (i === idx) el.classList.add('active');
+      });
+    }
+    function completeAllPhases() {
+      phaseOrder.forEach(p => {
+        const el = document.getElementById('phase-' + p);
+        el.classList.remove('active');
+        el.classList.add('done');
+      });
+    }
+
+    // ── LOG ────────────────────────────────────────────────
+    function appendLog(msg, level = 'info') {
+      const console = document.getElementById('log-console');
+      if (logCount === 0) console.innerHTML = '';
+      const now = new Date().toLocaleTimeString('en-GB', { hour12: false });
+      const line = document.createElement('div');
+      line.className = 'log-line';
+      line.innerHTML = `<span class="log-ts">[${now}]</span><span class="log-msg ${level}">${escHtml(msg)}</span>`;
+      console.appendChild(line);
+      console.scrollTop = console.scrollHeight;
+      logCount++;
+      document.getElementById('log-count').textContent = logCount;
+    }
+
+    // ── HOST TABLE ─────────────────────────────────────────
+    function badgeClass(level) {
+      return { CRITICAL: 'badge-critical', HIGH: 'badge-high', MEDIUM: 'badge-medium', LOW: 'badge-low' }[level] || 'badge-unknown';
+    }
+
+    function upsertHost(data) {
+      const tbody = document.getElementById('hosts-tbody');
+      const emptyRow = document.getElementById('empty-row');
+      if (emptyRow) emptyRow.remove();
+
+      const ports = (data.ports || []).map(p =>
+        `<span class="port-tag" title="${p.service || ''}">${p.port}/${p.protocol || 'tcp'}</span>`
+      ).join('');
+
+      const reasons = (data.reasons || []).join(', ') || '—';
+      const type = data.type || 'Unknown';
+      const crit = data.criticality || 'UNKNOWN';
+
+      if (hostRows[data.ip]) {
+        // Update existing row
+        const tr = hostRows[data.ip];
+        tr.innerHTML = buildRowHtml(data.ip, type, crit, ports, reasons);
+      } else {
+        const tr = document.createElement('tr');
+        tr.id = 'row-' + data.ip.replace(/\./g, '_');
+        tr.innerHTML = buildRowHtml(data.ip, type, crit, ports, reasons);
+        tbody.appendChild(tr);
+        hostRows[data.ip] = tr;
+        hostCount++;
+        document.getElementById('host-count').textContent = hostCount;
+      }
+    }
+
+    function buildRowHtml(ip, type, crit, ports, reasons) {
+      return `
+      <td style="font-family:var(--mono);font-weight:500">${ip}</td>
+      <td><span class="badge badge-type">${type}</span></td>
+      <td><span class="badge ${badgeClass(crit)}">${crit}</span></td>
+      <td>${ports || '<span style="color:var(--muted)">—</span>'}</td>
+      <td style="color:var(--text-dim);font-size:.75rem">${reasons}</td>
+    `;
+    }
+
+    // ── SSE EVENTS ─────────────────────────────────────────
+    function handleEvent(event) {
+      const { type, data } = JSON.parse(event.data);
+
+      switch (type) {
+        case 'status':
+          setPhase(data.phase);
+          document.getElementById('nav-status').textContent = '⚡ ' + data.phase.charAt(0).toUpperCase() + data.phase.slice(1);
+          break;
+
+        case 'log':
+          appendLog(data.message, data.level || 'info');
+          break;
+
+        case 'hosts_found':
+          (data.hosts || []).forEach(ip => upsertHost({ ip, type: 'Discovered', criticality: 'UNKNOWN', ports: [], reasons: [] }));
+          break;
+
+        case 'host_assessed':
+          upsertHost(data);
+          document.getElementById('m-total').textContent = hostCount;
+          break;
+
+        case 'host_enriched':
+          if (hostRows[data.ip]) {
+            const existing = hostRows[data.ip];
+            // just refresh port display
+            const ports = (data.ports || []).map(p =>
+              `<span class="port-tag">${p.port}/${p.protocol || 'tcp'}</span>`
+            ).join('');
+            existing.cells[3].innerHTML = ports;
+          }
+          break;
+
+        case 'report':
+          renderReport(data.content);
+          break;
+
+        case 'metrics':
+          document.getElementById('m-total').textContent = data.total_hosts || hostCount;
+          document.getElementById('m-critical').textContent = data.critical_hosts ?? '—';
+          document.getElementById('m-time').textContent = data.time_per_host ? data.time_per_host + 's' : '—';
+          document.getElementById('m-depth').textContent = data.depth ?? '—';
+          document.getElementById('m-packets').textContent = data.total_packets ?? '—';
+          break;
+
+        case 'done':
+          completeAllPhases();
+          document.getElementById('nav-status').textContent = '✅ Complete';
+          document.getElementById('btn-scan').disabled = false;
+          stopStream();
+          showToast('✅ Scan complete!');
+          break;
+      }
+    }
+
+    // ── REPORT ─────────────────────────────────────────────
+    function renderReport(content) {
+      document.getElementById('report-placeholder').style.display = 'none';
+      const el = document.getElementById('report-content');
+      el.style.display = 'block';
+      // Simple markdown-ish render
+      el.innerHTML = content
+        .replace(/^# (.+)/gm, '<h1>$1</h1>')
+        .replace(/^## (.+)/gm, '<h2>$2</h2>'.replace('$2', '$1'))
+        .replace(/^### (.+)/gm, '<h3>$1</h3>')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/^- (.+)/gm, '<li>$1</li>')
+        .replace(/(<li>.*<\/li>\n?)+/gs, m => '<ul>' + m + '</ul>')
+        .replace(/\n/g, '<br>');
+      switchTab('report');
+    }
+
+    // ── STREAM ─────────────────────────────────────────────
+    function stopStream() {
+      if (eventSource) { eventSource.close(); eventSource = null; }
+    }
+
+    // ── SCAN START ─────────────────────────────────────────
+    async function startScan() {
+      const target = document.getElementById('target-input').value.trim();
+      if (!target) { showToast('⚠️ Please enter a target.'); return; }
+
+      // Reset UI
+      document.getElementById('hosts-tbody').innerHTML = `
+      <tr id="empty-row"><td colspan="5"><div class="empty-state"><div class="big-icon">🛰️</div>Scanning…</div></td></tr>
+    `;
+      Object.keys(hostRows).forEach(k => delete hostRows[k]);
+      hostCount = 0; logCount = 0;
+      document.getElementById('host-count').textContent = '0';
+      document.getElementById('log-count').textContent = '0';
+      document.getElementById('log-console').innerHTML = '';
+      document.getElementById('report-content').style.display = 'none';
+      document.getElementById('report-placeholder').style.display = 'block';
+      document.getElementById('m-total').textContent = '—';
+      document.getElementById('m-critical').textContent = '—';
+      document.getElementById('m-time').textContent = '—';
+      document.getElementById('m-depth').textContent = '—';
+      document.getElementById('m-packets').textContent = '—';
+      phaseOrder.forEach(p => {
+        const el = document.getElementById('phase-' + p);
+        el.classList.remove('active', 'done');
+      });
+      document.getElementById('nav-status').textContent = '⏳ Starting…';
+      document.getElementById('btn-scan').disabled = true;
+
+      stopStream();
+
+      try {
+        const res = await fetch('/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target })
+        });
+        const json = await res.json();
+        if (!res.ok) { showToast('❌ ' + (json.error || 'Failed to start.')); document.getElementById('btn-scan').disabled = false; return; }
+      } catch (e) {
+        showToast('❌ Connection error: ' + e.message);
+        document.getElementById('btn-scan').disabled = false;
+        return;
+      }
+
+      // Connect SSE
+      eventSource = new EventSource('/stream');
+      eventSource.onmessage = handleEvent;
+      eventSource.onerror = () => {
+        appendLog('SSE connection error.', 'error');
+        stopStream();
+      };
+
+      appendLog(`Scan started → target: ${target}`, 'success');
+      switchTab('log');
+    }
+
+    // ── TOAST ──────────────────────────────────────────────
+    let toastTimer;
+    function showToast(msg) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => el.classList.remove('show'), 4000);
+    }
+
+    function escHtml(s) {
+      return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+  </script>
+</body>
+
+</html>

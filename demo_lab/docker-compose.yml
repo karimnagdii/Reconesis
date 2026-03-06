@@ -1,0 +1,134 @@
+version: '3.8'
+
+services:
+  # ─────────────────────────────────────────────
+  # CRITICAL ASSET 1: DATABASE SERVER (Port 5432)
+  # ─────────────────────────────────────────────
+  db_server:
+    image: postgres:15-alpine
+    container_name: demo_db_server
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password123
+      POSTGRES_DB: demo_db
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.10
+
+  # ─────────────────────────────────────────────
+  # CRITICAL ASSET 2: MAIL SERVER (Port 25)
+  # ─────────────────────────────────────────────
+  mail_server:
+    image: namshi/smtp
+    container_name: demo_mail_server
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.11
+
+  # ─────────────────────────────────────────────
+  # WEB SERVER (Port 80)
+  # ─────────────────────────────────────────────
+  web_server:
+    image: nginx:alpine
+    container_name: demo_web_server
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.12
+
+  # ─────────────────────────────────────────────
+  # GENERIC HOST (Port 22 - SSH)
+  # ─────────────────────────────────────────────
+  generic_host:
+    image: lscr.io/linuxserver/openssh-server:latest
+    container_name: demo_generic_host
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Etc/UTC
+      - USER_NAME=admin
+      - USER_PASSWORD=password123
+      - PASSWORD_ACCESS=true
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.13
+
+  # ─────────────────────────────────────────────
+  # CRITICAL ASSET 3: ROUTER (Ports 22, 23, 161)
+  # Simulated via Alpine + socat listeners
+  # ─────────────────────────────────────────────
+  router:
+    image: alpine:3.19
+    container_name: demo_router
+    command: >
+      sh -c "
+        apk add --no-cache socat openssh-server net-snmp &&
+        ssh-keygen -A &&
+        echo 'root:router123' | chpasswd &&
+        /usr/sbin/sshd &&
+        socat TCP-LISTEN:23,fork,reuseaddr SYSTEM:'echo Router Login:' &
+        snmpd -f -Lo -C --rwcommunity=public &
+        tail -f /dev/null
+      "
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.14
+
+  # ─────────────────────────────────────────────
+  # CRITICAL ASSET 4: FIREWALL (Ports 22, 443, 8443)
+  # Simulated via Alpine + socat/nginx listeners
+  # ─────────────────────────────────────────────
+  firewall:
+    image: alpine:3.19
+    container_name: demo_firewall
+    command: >
+      sh -c "
+        apk add --no-cache socat openssh-server &&
+        ssh-keygen -A &&
+        echo 'root:fw123' | chpasswd &&
+        /usr/sbin/sshd &&
+        socat TCP-LISTEN:443,fork,reuseaddr SYSTEM:'echo HTTPS Management' &
+        socat TCP-LISTEN:8443,fork,reuseaddr SYSTEM:'echo Firewall Admin' &
+        tail -f /dev/null
+      "
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.15
+
+  # ─────────────────────────────────────────────
+  # NOISE: WORKSTATIONS 1-4 (Port 80 each)
+  # Low-value targets to test filtering accuracy
+  # ─────────────────────────────────────────────
+  workstation_1:
+    image: nginx:alpine
+    container_name: demo_workstation_1
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.20
+
+  workstation_2:
+    image: nginx:alpine
+    container_name: demo_workstation_2
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.21
+
+  workstation_3:
+    image: nginx:alpine
+    container_name: demo_workstation_3
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.22
+
+  workstation_4:
+    image: nginx:alpine
+    container_name: demo_workstation_4
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.23
+
+networks:
+  recon_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
