@@ -8,6 +8,7 @@ import logging
 from flask import Flask, render_template, request, Response, jsonify
 
 from src.core.reconesis import ReconesisEngine
+from src.utils.config import validate_config
 
 # ─────────────────────────────────────────────
 # Flask App Setup
@@ -66,6 +67,12 @@ def start_scan():
     target = (data or {}).get("target", "").strip()
     if not target:
         return jsonify({"error": "No target specified."}), 400
+
+    # Validate configuration before launching scan
+    is_valid, error_msg = validate_config()
+    if not is_valid:
+        logger.error(f"Pre-scan validation failed: {error_msg}")
+        return jsonify({"error": error_msg}), 400
 
     # Fresh queue for each scan
     event_queue = queue.Queue()

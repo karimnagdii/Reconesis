@@ -2,12 +2,15 @@
 import subprocess
 import logging
 import re
+import shutil
+import platform
 from typing import Optional, Tuple
 
 
 class NmapExecutor:
     def __init__(self):
         self.logger = logging.getLogger("NmapExecutor")
+        self.nmap_path = self._find_nmap()
 
     def execute(self, command: str) -> Tuple[Optional[str], int]:
         """
@@ -27,8 +30,15 @@ class NmapExecutor:
             self.logger.error("Command failed sanitization — skipping execution.")
             return None, 0
 
-        # Ensure a timing flag is present (proposal §1.3: stealth adaptation)
-        command = self._apply_timing(command)
+        # Verify nmap is available
+        if not self.nmap_path:
+            self.logger.error(
+                "Nmap not found in PATH. Please install nmap:\n"
+                "  Windows: https://nmap.org/download.html\n"
+                "  macOS: brew install nmap\n"
+                "  Linux: sudo apt-get install nmap (or equivalent)"
+            )
+            return None, 0
 
         self.logger.info(f"Executing: {command}")
         try:
@@ -53,7 +63,7 @@ class NmapExecutor:
             packets = self._parse_packet_count(result.stderr)
 
             if not result.stdout or not result.stdout.strip():
-                self.logger.error("Nmap produced no output.")
+                self.logger.error(f"Nmap produced no output. Stderr: {result.stderr}")
                 return None, packets
 
             return result.stdout, packets
@@ -115,12 +125,25 @@ class NmapExecutor:
 
         return command
 
-    def _apply_timing(self, command: str, default_timing: str = "-T3") -> str:
+    def _find_nmap(self) -> Optional[str]:
         """
-        Ensures a timing flag is present in the Nmap command.
-        If the LLM omitted timing, inject the default. (Proposal §1.3: stealth adaptation)
+        Locates the nmap executable in the system PATH.
+        Returns the full path to nmap, or None if not found.
+        Handles Windows (.exe) and Unix variants.
         """
-        if re.search(r'-T\d', command):
-            return command  # LLM already included timing
-        self.logger.info(f"No timing flag found, injecting default {default_timing}")
-        return command.replace("nmap ", f"nmap {default_timing} ", 1)
+        # Try using shutil.which() — works on all platforms
+        nmap_path = shutil.which("nmap")
+        if nmap_path:
+            self.logger.debug(f"Found nmap at: {nmap_path}")
+            return nmap_path
+
+        # Fallback: try nmap.exe on Windows
+        if platform.system() == "Windows":
+            nmap_path = shutil.which("nmap.exe")
+            if nmap_path:
+                self.logger.debug(f"Found nmap.exe at: {nmap_path}")
+                return nmap_path
+
+        self.logger.warning("Nmap executable not found in PATH")
+        return None
+

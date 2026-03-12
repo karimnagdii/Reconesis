@@ -693,10 +693,6 @@
             <div class="metric-label">Packets Sent</div>
             <div class="metric-value" id="m-packets">—</div>
           </div>
-          <div class="metric-card">
-            <div class="metric-label">Accuracy</div>
-            <div class="metric-value" id="m-accuracy">—</div>
-          </div>
         </div>
       </div>
 
@@ -711,9 +707,6 @@
         </button>
         <button class="tab" id="tab-log" onclick="switchTab('log')">
           📟 Live Log <span class="tab-badge" id="log-count">0</span>
-        </button>
-        <button class="tab" id="tab-exploits" onclick="switchTab('exploits')">
-          ⚠️ Exploits <span class="tab-badge" id="exploit-count">0</span>
         </button>
         <button class="tab" id="tab-report" onclick="switchTab('report')">
           📄 AI Report
@@ -730,13 +723,12 @@
                 <th>Asset Type</th>
                 <th>Criticality</th>
                 <th>Open Ports</th>
-                <th>Exploits</th>
                 <th>Detection Reason</th>
               </tr>
             </thead>
             <tbody id="hosts-tbody">
               <tr id="empty-row">
-                <td colspan="6">
+                <td colspan="5">
                   <div class="empty-state">
                     <div class="big-icon">🛰️</div>
                     Start a scan to discover hosts on the network.
@@ -751,34 +743,6 @@
       <!-- Log Panel -->
       <div class="tab-panel" id="panel-log">
         <div id="log-console"><span style="color:var(--muted)"># Log output will appear here...</span></div>
-      </div>
-
-      <!-- Exploits Panel -->
-      <div class="tab-panel" id="panel-exploits">
-        <div class="hosts-table-wrap">
-          <table id="exploits-table">
-            <thead>
-              <tr>
-                <th>Host</th>
-                <th>Port</th>
-                <th>Service</th>
-                <th>CVE / Exploit ID</th>
-                <th>CVSS</th>
-                <th>Source</th>
-              </tr>
-            </thead>
-            <tbody id="exploits-tbody">
-              <tr id="exploits-empty-row">
-                <td colspan="6">
-                  <div class="empty-state">
-                    <div class="big-icon">🛡️</div>
-                    Exploit correlation results will appear here after Hunter mode.
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
       </div>
 
       <!-- Report Panel -->
@@ -803,9 +767,7 @@
     let eventSource = null;
     let logCount = 0;
     let hostCount = 0;
-    let exploitTotal = 0;
     const hostRows = {};   // ip -> <tr>
-    const hostExploitCounts = {};  // ip -> count
 
     // ── TABS ───────────────────────────────────────────────
     function switchTab(name) {
@@ -882,16 +844,11 @@
     }
 
     function buildRowHtml(ip, type, crit, ports, reasons) {
-      const ec = hostExploitCounts[ip] || 0;
-      const exploitCell = ec > 0
-        ? `<span class="badge badge-critical">${ec} CVE${ec > 1 ? 's' : ''}</span>`
-        : '<span style="color:var(--muted)">—</span>';
       return `
       <td style="font-family:var(--mono);font-weight:500">${ip}</td>
       <td><span class="badge badge-type">${type}</span></td>
       <td><span class="badge ${badgeClass(crit)}">${crit}</span></td>
       <td>${ports || '<span style="color:var(--muted)">—</span>'}</td>
-      <td>${exploitCell}</td>
       <td style="color:var(--text-dim);font-size:.75rem">${reasons}</td>
     `;
     }
@@ -930,38 +887,6 @@
           }
           break;
 
-        case 'host_exploits': {
-          const exploitsTbody = document.getElementById('exploits-tbody');
-          const emptyExploitRow = document.getElementById('exploits-empty-row');
-          if (emptyExploitRow) emptyExploitRow.remove();
-          let addedCount = 0;
-          (data.exploits || []).forEach(e => {
-            const tr = document.createElement('tr');
-            const cvssVal = parseFloat(e.cvss) || 0;
-            const cvssClass = cvssVal >= 7.0 ? 'badge-critical' : cvssVal >= 4.0 ? 'badge-high' : 'badge-medium';
-            tr.innerHTML = `
-              <td style="font-family:var(--mono)">${escHtml(data.ip)}</td>
-              <td>${e.port}</td>
-              <td>${escHtml(e.service || '')}</td>
-              <td style="font-family:var(--mono)">${escHtml(e.cve || '')}</td>
-              <td><span class="badge ${cvssClass}">${cvssVal.toFixed(1)}</span></td>
-              <td>${escHtml(e.source || '')}</td>
-            `;
-            exploitsTbody.appendChild(tr);
-            addedCount++;
-          });
-          exploitTotal += addedCount;
-          document.getElementById('exploit-count').textContent = exploitTotal;
-          // Update host exploit count and refresh host row
-          hostExploitCounts[data.ip] = (hostExploitCounts[data.ip] || 0) + addedCount;
-          if (hostRows[data.ip]) {
-            const row = hostRows[data.ip];
-            const ec = hostExploitCounts[data.ip];
-            row.cells[4].innerHTML = `<span class="badge badge-critical">${ec} CVE${ec > 1 ? 's' : ''}</span>`;
-          }
-          break;
-        }
-
         case 'report':
           renderReport(data.content);
           break;
@@ -972,7 +897,6 @@
           document.getElementById('m-time').textContent = data.time_per_host ? data.time_per_host + 's' : '—';
           document.getElementById('m-depth').textContent = data.depth ?? '—';
           document.getElementById('m-packets').textContent = data.total_packets ?? '—';
-          document.getElementById('m-accuracy').textContent = data.decision_accuracy != null ? data.decision_accuracy + '%' : '—';
           break;
 
         case 'done':
@@ -1014,24 +938,20 @@
 
       // Reset UI
       document.getElementById('hosts-tbody').innerHTML = `
-      <tr id="empty-row"><td colspan="6"><div class="empty-state"><div class="big-icon">🛰️</div>Scanning…</div></td></tr>
+      <tr id="empty-row"><td colspan="5"><div class="empty-state"><div class="big-icon">🛰️</div>Scanning…</div></td></tr>
     `;
       Object.keys(hostRows).forEach(k => delete hostRows[k]);
-      Object.keys(hostExploitCounts).forEach(k => delete hostExploitCounts[k]);
-      hostCount = 0; logCount = 0; exploitTotal = 0;
+      hostCount = 0; logCount = 0;
       document.getElementById('host-count').textContent = '0';
       document.getElementById('log-count').textContent = '0';
-      document.getElementById('exploit-count').textContent = '0';
       document.getElementById('log-console').innerHTML = '';
       document.getElementById('report-content').style.display = 'none';
       document.getElementById('report-placeholder').style.display = 'block';
-      document.getElementById('exploits-tbody').innerHTML = '<tr id="exploits-empty-row"><td colspan="6"><div class="empty-state"><div class="big-icon">🛡️</div>Exploit correlation results will appear here after Hunter mode.</div></td></tr>';
       document.getElementById('m-total').textContent = '—';
       document.getElementById('m-critical').textContent = '—';
       document.getElementById('m-time').textContent = '—';
       document.getElementById('m-depth').textContent = '—';
       document.getElementById('m-packets').textContent = '—';
-      document.getElementById('m-accuracy').textContent = '—';
       phaseOrder.forEach(p => {
         const el = document.getElementById('phase-' + p);
         el.classList.remove('active', 'done');

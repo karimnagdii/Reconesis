@@ -1,0 +1,32 @@
+2026-02-23 17:25:40,863 - ReconesisEngine - INFO - Starting Reconesis on target: 127.0.0.1
+2026-02-23 17:25:40,863 - ReconesisEngine - INFO - PHASE 1: SCOUT MODE - Initial Discovery
+2026-02-23 17:25:41,084 - GroqAgent - ERROR - Groq API error: 401 Client Error: Unauthorized for url: https://api.groq.com/openai/v1/chat/completions
+2026-02-23 17:25:41,084 - GroqAgent - ERROR - Response body: {"error":{"message":"Invalid API Key","type":"invalid_request_error","code":"invalid_api_key"}}
+
+2026-02-23 17:25:41,085 - ReconesisEngine - INFO - Agent generated command: 
+2026-02-23 17:25:41,085 - NmapExecutor - INFO - Executing: 
+2026-02-23 17:25:41,185 - NmapExecutor - WARNING - Nmap returned non-zero exit code: 1
+2026-02-23 17:25:41,186 - NmapExecutor - WARNING - Stderr: '-oX' is not recognized as an internal or external command,
+operable program or batch file.
+
+2026-02-23 17:25:41,186 - NmapExecutor - ERROR - Nmap produced no output.
+2026-03-06 13:37:58,917 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.100.2:5000
+2026-03-06 13:37:58,918 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2026-03-06 13:38:06,228 - werkzeug - INFO - 192.168.100.2 - - [06/Mar/2026 13:38:06] "GET / HTTP/1.1" 200 -
+2026-03-06 13:38:06,910 - werkzeug - INFO - 192.168.100.2 - - [06/Mar/2026 13:38:06] "[33mGET /favicon.ico HTTP/1.1[0m" 404 -
+2026-03-06 13:38:30,485 - Dashboard - INFO - Scan started on target: 172.20.0.0/24
+2026-03-06 13:38:30,493 - ReconesisEngine - INFO - --- Depth Level 1/3 ---
+2026-03-06 13:38:30,493 - werkzeug - INFO - 192.168.100.2 - - [06/Mar/2026 13:38:30] "POST /start HTTP/1.1" 200 -
+2026-03-06 13:38:30,494 - ReconesisEngine - INFO - PHASE 1: SCOUT MODE — Initial Host Discovery
+2026-03-06 13:38:30,506 - werkzeug - INFO - 192.168.100.2 - - [06/Mar/2026 13:38:30] "GET /stream HTTP/1.1" 200 -
+2026-03-06 13:38:31,291 - ReconesisEngine - INFO - Agent command: nmap -sn -PR -n 172.20.0.0/24
+2026-03-06 13:38:31,291 - NmapExecutor - INFO - Executing: nmap -sn -PR -n 172.20.0.0/24
+2026-03-06 13:38:31,319 - NmapExecutor - WARNING - Nmap returned non-zero exit code: 1
+2026-03-06 13:38:31,319 - NmapExecutor - WARNING - Stderr: 'nmap' is not recognized as an internal or external command,
+operable program or batch file.
+
+2026-03-06 13:38:31,319 - NmapExecutor - ERROR - Nmap produced no output.
+2026-03-06 13:38:31,320 - ReconesisEngine - ERROR - Discovery scan produced no output.

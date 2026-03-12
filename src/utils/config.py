@@ -1,5 +1,7 @@
 
 import os
+import logging
+import requests
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -23,19 +25,62 @@ class Config:
         "mssql", "rdp", "vnc", "ftp", "smtp", "imap", "pop3", "domain"
     ]
 
-    # Ground Truth for Demo Lab (proposal §5: Decision Accuracy)
-    # Maps IP → expected classification for accuracy measurement.
-    # When scanning networks outside the demo lab, this is ignored and
-    # the system falls back to ratio-based metrics.
-    GROUND_TRUTH = {
-        "172.20.0.10": {"type": "Database Server", "criticality": "CRITICAL"},
-        "172.20.0.11": {"type": "Mail Server", "criticality": "CRITICAL"},
-        "172.20.0.12": {"type": "Web Server/Admin Console", "criticality": "MEDIUM"},
-        "172.20.0.13": {"type": "Generic Host", "criticality": "LOW"},
-        "172.20.0.14": {"type": "Router", "criticality": "CRITICAL"},
-        "172.20.0.15": {"type": "Firewall", "criticality": "CRITICAL"},
-        "172.20.0.20": {"type": "Generic Host", "criticality": "LOW"},
-        "172.20.0.21": {"type": "Generic Host", "criticality": "LOW"},
-        "172.20.0.22": {"type": "Generic Host", "criticality": "LOW"},
-        "172.20.0.23": {"type": "Generic Host", "criticality": "LOW"},
+
+def validate_config():
+    """
+    Validates critical Reconesis configuration before scanning starts.
+    Checks Groq API key and tests connectivity.
+    Returns (is_valid, error_message) tuple.
+    """
+    logger = logging.getLogger("ConfigValidator")
+
+    # Check API key exists
+    if not Config.GROQ_API_KEY or not Config.GROQ_API_KEY.strip():
+        msg = (
+            "❌ Groq API key not configured.\n"
+            "Please set GROQ_API_KEY in your .env file or environment variables.\n"
+            "Get a free API key from: https://console.groq.com/keys"
+        )
+        logger.error(msg)
+        return False, msg
+
+    # Test API connectivity with a simple query
+    logger.info("Testing Groq API connectivity...")
+    headers = {
+        "Authorization": f"Bearer {Config.GROQ_API_KEY}",
+        "Content-Type": "application/json"
     }
+    payload = {
+        "model": Config.GROQ_MODEL,
+        "messages": [
+            {"role": "user", "content": "Say 'ok'"}
+        ]
+    }
+
+    try:
+        response = requests.post(Config.GROQ_API_URL, headers=headers, json=payload, timeout=10)
+        if response.status_code == 401:
+            msg = "❌ Groq API authentication failed. Invalid or expired API key."
+            logger.error(msg)
+            return False, msg
+        elif response.status_code == 403:
+            msg = "❌ Groq API access denied. Check your API key permissions."
+            logger.error(msg)
+            return False, msg
+        elif response.status_code >= 400:
+            error_detail = response.text[:200]
+            msg = f"❌ Groq API error ({response.status_code}): {error_detail}"
+            logger.error(msg)
+            return False, msg
+
+        logger.info("✓ Groq API connectivity verified")
+        return True, ""
+
+    except requests.exceptions.Timeout:
+        msg = "❌ Groq API request timed out. Check your network connection."
+        logger.error(msg)
+        return False, msg
+    except requests.exceptions.RequestException as e:
+        msg = f"❌ Groq API connection failed: {str(e)}"
+        logger.error(msg)
+        return False, msg
