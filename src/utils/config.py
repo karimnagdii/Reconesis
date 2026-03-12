@@ -22,3 +22,20 @@ class Config:
         "ssh", "telnet", "http", "https", "mysql", "postgresql",
         "mssql", "rdp", "vnc", "ftp", "smtp", "imap", "pop3", "domain"
     ]
+
+    # Ground Truth for Demo Lab (proposal §5: Decision Accuracy)
+    # Maps IP → expected classification for accuracy measurement.
+    # When scanning networks outside the demo lab, this is ignored and
+    # the system falls back to ratio-based metrics.
+    GROUND_TRUTH = {
+        "172.20.0.10": {"type": "Database Server", "criticality": "CRITICAL"},
+        "172.20.0.11": {"type": "Mail Server", "criticality": "CRITICAL"},
+        "172.20.0.12": {"type": "Web Server/Admin Console", "criticality": "MEDIUM"},
+        "172.20.0.13": {"type": "Generic Host", "criticality": "LOW"},
+        "172.20.0.14": {"type": "Router", "criticality": "CRITICAL"},
+        "172.20.0.15": {"type": "Firewall", "criticality": "CRITICAL"},
+        "172.20.0.20": {"type": "Generic Host", "criticality": "LOW"},
+        "172.20.0.21": {"type": "Generic Host", "criticality": "LOW"},
+        "172.20.0.22": {"type": "Generic Host", "criticality": "LOW"},
+        "172.20.0.23": {"type": "Generic Host", "criticality": "LOW"},
+    }

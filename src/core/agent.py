@@ -38,7 +38,8 @@ class GroqAgent:
             "Your objective is broad network mapping and asset discovery. "
             "You must balance speed, stealth, and coverage. Prefer techniques that minimize "
             "network noise (e.g., SYN stealth scans, ping sweeps, ARP discovery) while maximizing "
-            "host and service detection. Adapt your approach based on the target scope and context provided."
+            "host and service detection. Use stealth timing (-T2) during discovery to reduce detection risk. "
+            "Adapt your approach based on the target scope and context provided."
             + output_rule
         )
 
@@ -48,7 +49,7 @@ class GroqAgent:
             "Your goal is deep investigation: identify the exact database engine and version, "
             "check for authentication weaknesses, and enumerate database-specific vulnerabilities. "
             "Use version detection (-sV), OS fingerprinting (-O), and relevant NSE scripts such as "
-            "mysql-info, mysql-empty-password, ms-sql-info, pgsql-brute, mongodb-info, redis-info. "
+            "mysql-info, mysql-empty-password, ms-sql-info, pgsql-brute, mongodb-info, redis-info, vulners. "
             "Select scripts appropriate for the specific database type detected."
             + output_rule
         )
@@ -60,7 +61,7 @@ class GroqAgent:
             "open relays, SMTP user enumeration, and STARTTLS support. "
             "Use version detection (-sV) and relevant NSE scripts such as "
             "smtp-open-relay, smtp-enum-users, smtp-commands, smtp-vuln-cve2010-4344, "
-            "imap-capabilities, pop3-capabilities. "
+            "imap-capabilities, pop3-capabilities, vulners. "
             "Scan all standard mail ports: 25, 110, 143, 465, 587, 993, 995."
             + output_rule
         )
@@ -71,7 +72,7 @@ class GroqAgent:
             "Your goal is to fingerprint the device, identify the firmware version, and check for "
             "exposed management interfaces, default credentials, and SNMP community strings. "
             "Use OS fingerprinting (-O), version detection (-sV), and relevant NSE scripts such as "
-            "banner, ssh-auth-methods, http-title, snmp-brute, snmp-info, telnet-brute."
+            "banner, ssh-auth-methods, http-title, snmp-brute, snmp-info, telnet-brute, vulners."
             + output_rule
         )
 
@@ -81,7 +82,7 @@ class GroqAgent:
             "Your goal is to identify the web technology stack, check for common web vulnerabilities, "
             "and enumerate exposed endpoints. "
             "Use version detection (-sV) and relevant NSE scripts such as "
-            "http-title, http-headers, http-enum, http-methods, http-vuln-cve2017-5638, vuln."
+            "http-title, http-headers, http-enum, http-methods, http-vuln-cve2017-5638, vuln, vulners."
             + output_rule
         )
 
@@ -142,12 +143,24 @@ class GroqAgent:
                 system_prompt = hunter_generic_prompt
 
             details = "\n".join([f"- {t['ip']} (classified as: {t['type']})" for t in critical_targets])
+
+            # Stealth adaptation: timing guidance based on criticality (proposal §1.3)
+            timing_guidance = "\n\nTiming guidance based on asset criticality:\n"
+            for t in critical_targets:
+                crit = t.get("criticality", "HIGH")
+                if crit == "CRITICAL":
+                    timing_guidance += f"- {t['ip']}: Use aggressive timing (-T4) for thorough results\n"
+                else:
+                    timing_guidance += f"- {t['ip']}: Use polite timing (-T2) to reduce detection risk\n"
+            timing_guidance += "If all targets share the same criticality, use a single timing flag.\n"
+
             user_prompt = (
                 f"Critical assets requiring deep investigation:\n{details}\n\n"
                 "Reconnaissance phase: Hunter Mode — Deep Scan.\n"
                 "Objective: Run targeted vulnerability checks and version enumeration "
                 "against these specific high-value targets. "
                 "Generate a single comprehensive Nmap command covering all listed targets."
+                + timing_guidance
                 + history_context
             )
 
@@ -210,6 +223,11 @@ class GroqAgent:
             "with their IP, type, open ports, and risk level.\n\n"
             "# Risk Assessment\n"
             "Per-asset risk analysis with specific vulnerability details and potential impact.\n\n"
+            "# Known Exploits & CVE Correlation\n"
+            "If exploit/CVE data is present in the scan data (in the 'exploits' field per port), "
+            "include a table mapping hosts to known vulnerabilities with CVSS scores and "
+            "remediation priority. If no exploit data is present, note that no public exploits "
+            "were identified.\n\n"
             "# Recommended Remediation Actions\n"
             "Prioritized, actionable steps to mitigate the identified risks.\n\n"
             "# Conclusion\n"

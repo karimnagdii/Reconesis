@@ -7,6 +7,7 @@ from src.core.toon import TOONParser
 from src.core.executor import NmapExecutor
 from src.core.agent import GroqAgent
 from src.utils.criticality import CriticalityAssessor
+from src.utils.exploit_lookup import ExploitLookup
 from src.utils.config import Config
 
 
@@ -22,6 +23,7 @@ class ReconesisEngine:
         self.executor = NmapExecutor()
         self.agent = GroqAgent()
         self.assessor = CriticalityAssessor()
+        self.exploit_lookup = ExploitLookup()
         self.scan_history = []
 
         # Dashboard event stream hook
@@ -44,13 +46,66 @@ class ReconesisEngine:
         getattr(self.logger, level)(msg)
         self._emit("log", {"level": level, "message": msg})
 
+    def _compute_accuracy(self, hosts: list) -> dict:
+        """
+        Compute decision accuracy against ground truth if available (proposal §5).
+        Uses binary classification: is the host critical/high vs medium/low?
+        Falls back to ratio metric when ground truth is not available.
+        """
+        gt = Config.GROUND_TRUTH
+        scanned_ips = {h.get("target") for h in hosts}
+
+        # Check if any scanned IPs match ground truth entries
+        matching_ips = scanned_ips & set(gt.keys())
+        if not matching_ips:
+            # Fallback: ratio metric (no ground truth for this network)
+            total = self.metrics["total_hosts"]
+            critical = self.metrics["critical_hosts"]
+            ratio = round((critical / total) * 100, 1) if total > 0 else 0.0
+            self._log(f"No ground truth available — using ratio metric: {ratio}%")
+            return {"accuracy": ratio, "method": "ratio"}
+
+        tp = fp = tn = fn = 0
+        for host in hosts:
+            ip = host.get("target")
+            if ip not in gt:
+                continue
+            actual_is_critical = host.get("criticality", "LOW") in ("CRITICAL", "HIGH")
+            expected_is_critical = gt[ip]["criticality"] in ("CRITICAL", "HIGH")
+
+            if actual_is_critical and expected_is_critical:
+                tp += 1
+            elif actual_is_critical and not expected_is_critical:
+                fp += 1
+            elif not actual_is_critical and expected_is_critical:
+                fn += 1
+            else:
+                tn += 1
+
+        total = tp + fp + tn + fn
+        accuracy = round(((tp + tn) / total) * 100, 1) if total > 0 else 0.0
+        precision = round((tp / (tp + fp)) * 100, 1) if (tp + fp) > 0 else 0.0
+        recall = round((tp / (tp + fn)) * 100, 1) if (tp + fn) > 0 else 0.0
+        f1 = round(2 * (precision * recall) / (precision + recall), 1) if (precision + recall) > 0 else 0.0
+
+        self._log(f"Decision accuracy (ground truth): {accuracy}% | P={precision}% R={recall}% F1={f1}%")
+        return {
+            "accuracy": accuracy,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "tp": tp, "fp": fp, "tn": tn, "fn": fn,
+            "method": "ground_truth"
+        }
+
     def start_scan(self, target: str):
         self.metrics["start_time"] = time.time()
         self._log(f"🚀 Starting Reconesis on target: {target}")
         self._emit("status", {"phase": "discovery", "target": target})
 
-        seen_hashes = set()          # Hash-saturation termination (proposal §4.3.4)
+        seen_hashes = set()          # Information-saturation termination (proposal §4.3.4)
         depth = 0
+        live_ips = []
         all_detailed_hosts = []
 
         # ---------------------------------------------------------------
@@ -94,6 +149,14 @@ class ReconesisEngine:
                 self._log(f"Discovered {len(live_ips)} live hosts: {live_ips}")
                 self._emit("hosts_found", {"hosts": live_ips})
 
+                # OODA feedback: record discovery findings (proposal §4.1)
+                self.scan_history.append({
+                    "phase": "discovery",
+                    "depth": depth,
+                    "live_hosts": live_ips,
+                    "host_count": len(live_ips)
+                })
+
             # -----------------------------------------------------------
             # PHASE 2: PORT SCAN & ASSET CLASSIFICATION
             # -----------------------------------------------------------
@@ -119,10 +182,10 @@ class ReconesisEngine:
 
             detailed_hosts = self.parser.parse(raw_xml_detailed)
 
-            # --- Hash Saturation Check (proposal §4.3.4) ---
+            # --- Information Saturation Check (proposal §4.3.4) ---
             current_hash = self.parser.compute_hash(detailed_hosts)
             if current_hash in seen_hashes:
-                self._log("Hash saturation detected — no new information. Stopping loop.")
+                self._log("Information saturation detected — no new information. Stopping loop.")
                 all_detailed_hosts = detailed_hosts  # Use last data
                 break
             seen_hashes.add(current_hash)
@@ -154,6 +217,18 @@ class ReconesisEngine:
 
             self.metrics["total_hosts"] = len(detailed_hosts)
             self.metrics["critical_hosts"] = len(critical_targets)
+
+            # OODA feedback: record assessment findings (proposal §4.1)
+            self.scan_history.append({
+                "phase": "assessment",
+                "depth": depth,
+                "hosts": [{
+                    "ip": h["target"],
+                    "type": h.get("type"),
+                    "criticality": h.get("criticality"),
+                    "ports": [p["port"] for p in h.get("ports", [])]
+                } for h in detailed_hosts]
+            })
 
             # --- Criticality Fulfilment Check (proposal §4.3.4) ---
             if not critical_targets:
@@ -195,13 +270,43 @@ class ReconesisEngine:
                             "ip": host['target'],
                             "ports": host['ports']
                         })
+                # OODA feedback: record hunter findings (proposal §4.1)
+                self.scan_history.append({
+                    "phase": "hunter",
+                    "depth": depth,
+                    "enriched_hosts": [{
+                        "ip": h["target"],
+                        "port_count": len(h.get("ports", []))
+                    } for h in hunter_hosts]
+                })
             else:
                 self._log("Hunter scan produced no output.", "warning")
 
-            # After hunter scan, all critical assets have been investigated
-            # Proposal §4.3.4: "All flagged Critical have had full NSE scan → stop"
-            self._log("All critical assets investigated. Termination criteria met.")
-            break
+            # --- Exploit/CVE Correlation ---
+            self._log("Running exploit/CVE correlation on discovered services...")
+            all_detailed_hosts = self.exploit_lookup.enrich_from_nse(all_detailed_hosts)
+            all_detailed_hosts = self.exploit_lookup.enrich_from_cpe(all_detailed_hosts)
+
+            # Emit exploit data per host to dashboard
+            for host in all_detailed_hosts:
+                host_exploits = []
+                for port in host.get("ports", []):
+                    for exploit in port.get("exploits", []):
+                        host_exploits.append({
+                            "port": port["port"],
+                            "service": port.get("service", ""),
+                            **exploit
+                        })
+                if host_exploits:
+                    self._emit("host_exploits", {
+                        "ip": host["target"],
+                        "exploits": host_exploits
+                    })
+
+            # Hunter complete for this depth. Loop continues to next depth level
+            # where Assessment re-runs with OODA context. Information saturation
+            # (line above) will terminate if no new data is discovered.
+            self._log(f"Hunter mode complete for depth {depth}. Continuing to next iteration...")
 
         # ---------------------------------------------------------------
         # PHASE 4: FINAL REPORT
@@ -231,9 +336,10 @@ class ReconesisEngine:
 
         if total_hosts > 0:
             self.metrics["time_per_host"] = round(elapsed / total_hosts, 2)
-            # Decision accuracy: % of correctly identified critical/non-critical (known demo targets)
-            # For display, we show critical ratio as a proxy metric
-            self.metrics["decision_accuracy"] = round((critical / total_hosts) * 100, 1)
+            # Decision accuracy: real accuracy against ground truth when available (proposal §5)
+            accuracy_data = self._compute_accuracy(all_detailed_hosts)
+            self.metrics["decision_accuracy"] = accuracy_data["accuracy"]
+            self.metrics["accuracy_details"] = accuracy_data
 
         self._emit("metrics", self.metrics)
         self._emit("done", {"message": "Reconesis scan complete."})

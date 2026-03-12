@@ -27,6 +27,9 @@ class NmapExecutor:
             self.logger.error("Command failed sanitization — skipping execution.")
             return None, 0
 
+        # Ensure a timing flag is present (proposal §1.3: stealth adaptation)
+        command = self._apply_timing(command)
+
         self.logger.info(f"Executing: {command}")
         try:
             # Ensure output is in XML format if not already specified
@@ -112,3 +115,12 @@ class NmapExecutor:
 
         return command
 
+    def _apply_timing(self, command: str, default_timing: str = "-T3") -> str:
+        """
+        Ensures a timing flag is present in the Nmap command.
+        If the LLM omitted timing, inject the default. (Proposal §1.3: stealth adaptation)
+        """
+        if re.search(r'-T\d', command):
+            return command  # LLM already included timing
+        self.logger.info(f"No timing flag found, injecting default {default_timing}")
+        return command.replace("nmap ", f"nmap {default_timing} ", 1)
