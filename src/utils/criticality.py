@@ -31,7 +31,16 @@ class CriticalityAssessor:
     PROFILES = {
         "Database Server": {
             "port_exact":  {3306, 5432, 1433, 1521, 27017, 6379, 5984, 9200, 9300},
-            "port_combo":  [],
+            "port_combo":  [
+                {3306},    # MySQL — unambiguous
+                {5432},    # PostgreSQL — unambiguous
+                {27017},   # MongoDB — unambiguous
+                {6379},    # Redis — unambiguous
+                {1433},    # MSSQL — unambiguous
+                {1521},    # Oracle — unambiguous
+                {5984},    # CouchDB — unambiguous
+                {9200},    # Elasticsearch — unambiguous
+            ],
             "services":    {"mysql", "postgresql", "ms-sql-s", "mssql", "oracle-tns",
                             "mongodb", "redis", "couchdb", "elasticsearch", "cassandra",
                             "mariadb"},

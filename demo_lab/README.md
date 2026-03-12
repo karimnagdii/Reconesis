@@ -1,39 +1,51 @@
 # Reconesis Demo Lab
 
-This directory contains a pre-configured Docker network environment designed specifically to test and demonstrate the capabilities of **Reconesis** safely, without scanning live networks.
+This directory contains a pre-configured Docker network environment designed to test and demonstrate **Reconesis** safely, without scanning live networks.
 
 ## Architecture
 
-The lab creates an isolated Docker bridge network (`172.20.0.0/24`) containing **10 distinct targets** — 4 critical infrastructure assets, 2 standard hosts, and 4 workstation "noise" nodes:
-
-### Critical Assets (Should be flagged by Reconesis)
-
-| Container | IP Address | Simulated Identity | Exposed Services |
-| :--- | :--- | :--- | :--- |
-| `demo_db_server` | `172.20.0.10` | Database Server | PostgreSQL (5432) |
-| `demo_mail_server` | `172.20.0.11` | Mail Server | SMTP (25) |
-| `demo_router` | `172.20.0.14` | Router | SSH (22), Telnet (23), SNMP (161) |
-| `demo_firewall` | `172.20.0.15` | Firewall | SSH (22), HTTPS (443), Admin (8443) |
-
-### Standard Hosts
-
-| Container | IP Address | Simulated Identity | Exposed Services |
-| :--- | :--- | :--- | :--- |
-| `demo_web_server` | `172.20.0.12` | Web Server | HTTP (80) |
-| `demo_generic_host` | `172.20.0.13` | Standard Linux Host | SSH (22) |
-
-### Noise Targets (Should be ignored by Reconesis)
-
-| Container | IP Address | Simulated Identity | Exposed Services |
-| :--- | :--- | :--- | :--- |
-| `demo_workstation_1` | `172.20.0.20` | Workstation | HTTP (80) |
-| `demo_workstation_2` | `172.20.0.21` | Workstation | HTTP (80) |
-| `demo_workstation_3` | `172.20.0.22` | Workstation | HTTP (80) |
-| `demo_workstation_4` | `172.20.0.23` | Workstation | HTTP (80) |
+The lab creates an isolated Docker bridge network (`172.20.0.0/24`) with **20 containers** across three tiers: 7 critical infrastructure assets, 5 standard hosts, and 8 noise nodes.
 
 ---
 
-## 🚀 How to Run the Demo (Ubuntu)
+### Tier 1 — Critical Assets (should be flagged CRITICAL or HIGH)
+
+| Container | IP Address | Simulated Identity | Exposed Services |
+| :--- | :--- | :--- | :--- |
+| `demo_db_postgres` | `172.20.0.10` | PostgreSQL Database | PostgreSQL (5432) |
+| `demo_db_mysql` | `172.20.0.11` | MySQL Database | MySQL (3306) |
+| `demo_db_redis` | `172.20.0.12` | Redis Cache/DB | Redis (6379) |
+| `demo_db_mongo` | `172.20.0.13` | MongoDB | MongoDB (27017) |
+| `demo_mail_server` | `172.20.0.14` | Mail Server | SMTP (25), POP3 (110), IMAP (143), Submission (587) |
+| `demo_router_core` | `172.20.0.15` | Core Router | SSH (22), Telnet (23), SNMP (161), BGP (179) |
+| `demo_firewall_edge` | `172.20.0.16` | Edge Firewall | SSH (22), HTTPS (443), Admin (8443) |
+
+### Tier 2 — Standard Hosts (should score MEDIUM or LOW)
+
+| Container | IP Address | Simulated Identity | Exposed Services |
+| :--- | :--- | :--- | :--- |
+| `demo_web_frontend` | `172.20.0.20` | Nginx Web Server | HTTP (80) |
+| `demo_app_server` | `172.20.0.21` | Application Server | HTTP (80), HTTP (8080) |
+| `demo_jumpbox` | `172.20.0.22` | Bastion / Jump Host | SSH (22) |
+| `demo_monitoring` | `172.20.0.23` | Grafana + Prometheus | SSH (22), Grafana (3000), Prometheus (9090) |
+| `demo_ldap_server` | `172.20.0.24` | Active Directory / LDAP | LDAP (389), LDAPS (636) |
+
+### Tier 3 — Noise (should score LOW and be deprioritised)
+
+| Container | IP Address | Simulated Identity | Exposed Services |
+| :--- | :--- | :--- | :--- |
+| `demo_workstation_1` | `172.20.0.30` | Corporate Workstation | HTTP (80) |
+| `demo_workstation_2` | `172.20.0.31` | Corporate Workstation | HTTP (80) |
+| `demo_workstation_3` | `172.20.0.32` | Corporate Workstation | HTTP (80) |
+| `demo_workstation_4` | `172.20.0.33` | Corporate Workstation | HTTP (80) |
+| `demo_workstation_5` | `172.20.0.34` | Corporate Workstation | HTTP (80) |
+| `demo_workstation_6` | `172.20.0.35` | Corporate Workstation | HTTP (80) |
+| `demo_printer_1` | `172.20.0.40` | Network Printer | HTTP (80) |
+| `demo_printer_2` | `172.20.0.41` | Network Printer | HTTP (80) |
+
+---
+
+## How to Run the Demo (Ubuntu)
 
 ### Prerequisites
 Run the setup script from the project root (one-time):
@@ -48,19 +60,19 @@ This installs `nmap`, `docker`, `docker-compose`, and Python dependencies.
 cd demo_lab
 docker-compose up -d
 ```
-*(First run downloads images — may take a minute.)*
+First run downloads images — may take a few minutes.
 
 ### 2. Verify the Lab is Running
 ```bash
-docker ps
-# Should show 10 containers
+docker ps | grep demo_
+# Should show 20 containers
 ```
 
 ### 3. Run Reconesis (CLI)
 From the project root:
 ```bash
 source venv/bin/activate
-sudo python3 main.py --target 172.20.0.0/24
+sudo venv/bin/python main.py --target 172.20.0.0/24 --verbose
 ```
 > **Note:** `sudo` is required because Nmap needs raw socket access for SYN scans on Linux.
 
@@ -68,34 +80,43 @@ sudo python3 main.py --target 172.20.0.0/24
 For a visual demo with live scan visibility:
 ```bash
 source venv/bin/activate
-sudo python3 dashboard.py
+sudo venv/bin/python dashboard.py
 # Open http://localhost:5000 in your browser
 # Enter target: 172.20.0.0/24
 ```
 
 ### 5. Stop the Lab
 ```bash
+cd demo_lab
 docker-compose down
 ```
 
-## What to Expect in the Demo
+---
 
-When you point Reconesis at `172.20.0.0/24`:
+## Expected Reconesis Output
 
-1. **Scout Mode** will sweep the `/24` subnet and discover all 10 live containers.
-2. The agent will run a port scan against all 10 IPs.
-3. The `CriticalityAssessor` will correctly:
-   - Flag `172.20.0.10` as **Database Server** (port 5432)
-   - Flag `172.20.0.11` as **Mail Server** (port 25)
-   - Flag `172.20.0.14` as **Router** (ports 22+23+161)
-   - Flag `172.20.0.15` as **Firewall** (ports 22+443+8443)
-   - Classify workstations as **LOW** (only port 80 — not critical)
-4. **Hunter Mode** will execute targeted deeper scans specifically against the 4 critical assets.
-5. A final `scan_report.md` will be generated highlighting the critical infrastructure detected.
+When pointed at `172.20.0.0/24`, Reconesis should:
 
-## Paper Evaluation Data
+1. **Scout Mode** — sweep the `/24` subnet and discover all 20 live containers.
+2. **Port Scan & Classification** — run targeted port scans and classify each host:
+   - `172.20.0.10` → **CRITICAL** — Database Server (PostgreSQL 5432)
+   - `172.20.0.11` → **CRITICAL** — Database Server (MySQL 3306)
+   - `172.20.0.12` → **CRITICAL** — Database Server (Redis 6379)
+   - `172.20.0.13` → **CRITICAL** — Database Server (MongoDB 27017)
+   - `172.20.0.14` → **CRITICAL** — Mail Server (SMTP + POP3 + IMAP + Submission)
+   - `172.20.0.15` → **CRITICAL** — Router (SSH + Telnet + SNMP + BGP)
+   - `172.20.0.16` → **CRITICAL** — Firewall (SSH + HTTPS + Admin)
+   - `172.20.0.20–.24` → **MEDIUM/LOW** — Standard hosts (web, app, jump, monitoring, LDAP)
+   - `172.20.0.30–.35` → **LOW** — Workstation noise (port 80 only)
+   - `172.20.0.40–.41` → **LOW** — Printer noise (port 80 only)
+3. **Hunter Mode** — execute deep targeted scans against the 7 critical assets using type-specific prompts (Database, Mail, Router/Firewall).
+4. **Report** — `scan_report.md` should mention all 4 database technologies (PostgreSQL, MySQL, Redis, MongoDB) plus mail server, router, and firewall findings.
 
-After running the demo, collect:
-- `scan_results.json` — TOON-formatted structured output
-- `scan_report.md` — AI-generated risk report
-- Console output — Time-per-host, packet count, depth metrics
+---
+
+## Output Files
+
+After scanning, collect from the project root:
+- `scan_results.json` — TOON-formatted structured scan data
+- `scan_report.md` — AI-generated Markdown vulnerability report
+- `reconesis.log` — Full run log with timing and depth metrics

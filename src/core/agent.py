@@ -115,12 +115,16 @@ class GroqAgent:
             user_prompt = (
                 f"Targets (live hosts): {targets_str}\n"
                 "Reconnaissance phase: Port Scan & Service Detection.\n"
-                "Objective: Identify open ports and running services on these hosts to classify them.\n"
+                "Objective: Identify open ports and running services on these hosts to classify them as:\n"
+                "  - Database servers (MySQL, PostgreSQL, MongoDB, Redis, Elasticsearch, MSSQL, Oracle)\n"
+                "  - Mail servers (SMTP, IMAP, POP3, submission)\n"
+                "  - Network infrastructure (routers with SSH/Telnet/BGP, firewalls with HTTPS/alt-HTTPS)\n"
+                "  - Web servers, admin consoles, or any other high-value services\n"
                 "Requirements:\n"
                 "- Use SYN stealth scan (-sS) with version detection (-sV)\n"
-                "- Scan the top 1000 ports (--top-ports 1000)\n"
-                "- List all target IPs space-separated at the END of the command\n"
-                f"- Correct syntax example: nmap -sS -sV --top-ports 1000 {targets_str}"
+                "- Use an explicit -p flag with a port list broad enough to cover all the asset types above\n"
+                "- Do NOT use --top-ports; choose specific ports with -p for predictable coverage\n"
+                "- List all target IPs space-separated at the END of the command"
                 + history_context
             )
 
@@ -203,6 +207,51 @@ class GroqAgent:
             self.logger.error(f"Failed to parse Groq API response: {e}")
             return ""
 
+    @staticmethod
+    def _slim_toon(toon_data: list) -> list:
+        """
+        Reduces TOON payload size before sending to Groq to avoid 413 token limit errors.
+
+        Strategy:
+        - Strip raw NSE `scripts` output from all ports (already parsed into `exploits`)
+        - LOW/MEDIUM hosts: keep only target, type, criticality, and minimal port list
+        - CRITICAL/HIGH hosts: keep full detail but cap exploits to top 5 by CVSS score
+        """
+        slimmed = []
+        for host in toon_data:
+            level = host.get("criticality", "LOW")
+            if level in ("CRITICAL", "HIGH"):
+                slim_ports = []
+                for p in host.get("ports", []):
+                    slim_p = {k: v for k, v in p.items() if k != "scripts"}
+                    # Cap exploits to top 5 by CVSS
+                    if slim_p.get("exploits"):
+                        slim_p["exploits"] = sorted(
+                            slim_p["exploits"],
+                            key=lambda e: e.get("cvss", 0),
+                            reverse=True
+                        )[:5]
+                    slim_ports.append(slim_p)
+                slimmed.append({
+                    "target": host.get("target"),
+                    "type": host.get("type", "Unknown"),
+                    "criticality": level,
+                    "os": host.get("os", {}),
+                    "ports": slim_ports,
+                })
+            else:
+                # LOW/MEDIUM: just enough context to mention in topology overview
+                slimmed.append({
+                    "target": host.get("target"),
+                    "type": host.get("type", "Generic Host"),
+                    "criticality": level,
+                    "ports": [
+                        {"port": p["port"], "service": p.get("service", "")}
+                        for p in host.get("ports", [])
+                    ],
+                })
+        return slimmed
+
     def _build_analysis_prompt(self, toon_data: list) -> tuple:
         """
         Builds a structured analysis prompt with enforced report sections.
@@ -221,18 +270,23 @@ class GroqAgent:
             "A table of critical infrastructure found (Routers, Firewalls, Mail Servers, Databases) "
             "with their IP, type, open ports, and risk level.\n\n"
             "# Risk Assessment\n"
-            "Per-asset risk analysis with specific vulnerability details and potential impact.\n\n"
+            "Per-asset risk analysis with specific vulnerability details and potential impact. "
+            "For each asset, if 'exploits' data is present in any port, include a CVE table with "
+            "columns: CVE ID | CVSS Score | Affected Service | Source. "
+            "Highlight any CVE with CVSS >= 7.0 as HIGH or CRITICAL severity.\n\n"
             "# Recommended Remediation Actions\n"
-            "Prioritized, actionable steps to mitigate the identified risks.\n\n"
+            "Prioritized, actionable steps to mitigate the identified risks. "
+            "Reference specific CVE IDs where applicable.\n\n"
             "# Conclusion\n"
             "Final summary and overall risk posture assessment."
         )
 
+        slim_data = self._slim_toon(toon_data)
         user_prompt = (
             "Below is the complete scan data in TOON (Target-Oriented Object Notation) format. "
             "Analyze every host, paying special attention to assets classified as Critical or High. "
             "Identify patterns, exposed services, and potential attack vectors.\n\n"
-            f"SCAN DATA:\n{json.dumps(toon_data, indent=2)}"
+            f"SCAN DATA:\n{json.dumps(slim_data, indent=2)}"
         )
 
         return system_prompt, user_prompt

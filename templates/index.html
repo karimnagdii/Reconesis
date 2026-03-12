@@ -510,7 +510,7 @@
       font-size: .85rem;
       line-height: 1.75;
       flex: 1;
-      white-space: pre-wrap;
+      white-space: normal;
       font-family: var(--font);
       overflow-y: auto;
     }
@@ -519,28 +519,81 @@
     #report-content h2,
     #report-content h3 {
       color: var(--text);
-      margin: 1.2rem 0 .5rem;
+      margin: 1.4rem 0 .6rem;
+      padding-left: .6rem;
+      border-left: 3px solid var(--accent);
     }
 
-    #report-content h1 {
-      font-size: 1.3rem;
-    }
+    #report-content h1 { font-size: 1.3rem; border-left-width: 4px; }
+    #report-content h2 { font-size: 1.05rem; color: var(--accent); }
+    #report-content h3 { font-size: .9rem; border-left-color: var(--muted); }
 
-    #report-content h2 {
-      font-size: 1.05rem;
-      color: var(--accent);
-    }
+    #report-content p { margin: .5rem 0; }
 
-    #report-content strong {
-      color: var(--text);
-    }
+    #report-content strong { color: var(--text); }
 
-    #report-content ul {
+    #report-content ul, #report-content ol {
       padding-left: 1.5rem;
+      margin: .4rem 0;
     }
 
-    #report-content li {
-      margin-bottom: .3rem;
+    #report-content li { margin-bottom: .3rem; }
+
+    #report-content a { color: var(--accent); text-decoration: none; }
+    #report-content a:hover { text-decoration: underline; }
+
+    #report-content code {
+      background: rgba(0,0,0,.35);
+      border-radius: 3px;
+      padding: .1em .35em;
+      font-family: var(--mono);
+      font-size: .82em;
+    }
+
+    #report-content pre {
+      background: rgba(0,0,0,.35);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: .8rem 1rem;
+      overflow-x: auto;
+      margin: .6rem 0;
+    }
+
+    #report-content pre code {
+      background: none;
+      padding: 0;
+      font-size: .8rem;
+    }
+
+    #report-content table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: .8rem 0;
+      font-size: .8rem;
+    }
+
+    #report-content th {
+      background: var(--bg);
+      color: var(--accent);
+      padding: .45rem .7rem;
+      text-align: left;
+      border: 1px solid var(--border);
+      font-weight: 600;
+    }
+
+    #report-content td {
+      padding: .4rem .7rem;
+      border: 1px solid var(--border);
+      vertical-align: top;
+    }
+
+    #report-content tr:nth-child(even) td { background: rgba(255,255,255,.02); }
+
+    #report-content blockquote {
+      border-left: 3px solid var(--muted);
+      margin: .6rem 0;
+      padding: .3rem .8rem;
+      color: var(--text-dim);
     }
 
     #report-placeholder {
@@ -602,6 +655,7 @@
       background: var(--muted);
     }
   </style>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 
 <body>
@@ -724,11 +778,12 @@
                 <th>Criticality</th>
                 <th>Open Ports</th>
                 <th>Detection Reason</th>
+                <th>CVEs</th>
               </tr>
             </thead>
             <tbody id="hosts-tbody">
               <tr id="empty-row">
-                <td colspan="5">
+                <td colspan="6">
                   <div class="empty-state">
                     <div class="big-icon">🛰️</div>
                     Start a scan to discover hosts on the network.
@@ -815,6 +870,8 @@
       return { CRITICAL: 'badge-critical', HIGH: 'badge-high', MEDIUM: 'badge-medium', LOW: 'badge-low' }[level] || 'badge-unknown';
     }
 
+    const hostCves = {};  // ip → cves array
+
     function upsertHost(data) {
       const tbody = document.getElementById('hosts-tbody');
       const emptyRow = document.getElementById('empty-row');
@@ -827,15 +884,16 @@
       const reasons = (data.reasons || []).join(', ') || '—';
       const type = data.type || 'Unknown';
       const crit = data.criticality || 'UNKNOWN';
+      const cvesHtml = buildCveHtml(hostCves[data.ip]);
 
       if (hostRows[data.ip]) {
         // Update existing row
         const tr = hostRows[data.ip];
-        tr.innerHTML = buildRowHtml(data.ip, type, crit, ports, reasons);
+        tr.innerHTML = buildRowHtml(data.ip, type, crit, ports, reasons, cvesHtml);
       } else {
         const tr = document.createElement('tr');
         tr.id = 'row-' + data.ip.replace(/\./g, '_');
-        tr.innerHTML = buildRowHtml(data.ip, type, crit, ports, reasons);
+        tr.innerHTML = buildRowHtml(data.ip, type, crit, ports, reasons, cvesHtml);
         tbody.appendChild(tr);
         hostRows[data.ip] = tr;
         hostCount++;
@@ -843,14 +901,39 @@
       }
     }
 
-    function buildRowHtml(ip, type, crit, ports, reasons) {
+    function buildRowHtml(ip, type, crit, ports, reasons, cvesHtml) {
       return `
       <td style="font-family:var(--mono);font-weight:500">${ip}</td>
       <td><span class="badge badge-type">${type}</span></td>
       <td><span class="badge ${badgeClass(crit)}">${crit}</span></td>
       <td>${ports || '<span style="color:var(--muted)">—</span>'}</td>
       <td style="color:var(--text-dim);font-size:.75rem">${reasons}</td>
+      <td class="cve-cell">${cvesHtml || '<span style="color:var(--muted)">—</span>'}</td>
     `;
+    }
+
+    function buildCveHtml(cves) {
+      if (!cves || cves.length === 0) return '<span style="color:var(--muted)">—</span>';
+      return cves.map(c => {
+        const score = parseFloat(c.cvss) || 0;
+        const cls = score >= 9.0 ? 'badge-critical' : score >= 7.0 ? 'badge-high' : score >= 4.0 ? 'badge-medium' : 'badge-low';
+        const label = c.cve || '?';
+        const title = `${c.service || ''}:${c.port || ''} | CVSS ${score} | ${c.source || ''}`;
+
+        let href = null;
+        if (label.startsWith('CVE-')) {
+          href = `https://nvd.nist.gov/vuln/detail/${label}`;
+        } else if (label.startsWith('EDB-ID:')) {
+          href = `https://www.exploit-db.com/exploits/${label.replace('EDB-ID:', '')}`;
+        }
+
+        const tag = href
+          ? `<a href="${href}" target="_blank" rel="noopener noreferrer"`
+          : `<span`;
+        const close = href ? `</a>` : `</span>`;
+
+        return `${tag} class="badge ${cls}" title="${title}" style="font-size:.65rem;margin:1px;text-decoration:none">${label}${close}`;
+      }).join(' ');
     }
 
     // ── SSE EVENTS ─────────────────────────────────────────
@@ -879,11 +962,19 @@
         case 'host_enriched':
           if (hostRows[data.ip]) {
             const existing = hostRows[data.ip];
-            // just refresh port display
+            // refresh port display (col 3)
             const ports = (data.ports || []).map(p =>
               `<span class="port-tag">${p.port}/${p.protocol || 'tcp'}</span>`
             ).join('');
             existing.cells[3].innerHTML = ports;
+          }
+          break;
+
+        case 'cves_found':
+          hostCves[data.ip] = data.cves || [];
+          if (hostRows[data.ip]) {
+            // update CVE cell (col 5) in-place
+            hostRows[data.ip].cells[5].innerHTML = buildCveHtml(data.cves);
           }
           break;
 
@@ -914,15 +1005,7 @@
       document.getElementById('report-placeholder').style.display = 'none';
       const el = document.getElementById('report-content');
       el.style.display = 'block';
-      // Simple markdown-ish render
-      el.innerHTML = content
-        .replace(/^# (.+)/gm, '<h1>$1</h1>')
-        .replace(/^## (.+)/gm, '<h2>$2</h2>'.replace('$2', '$1'))
-        .replace(/^### (.+)/gm, '<h3>$1</h3>')
-        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-        .replace(/^- (.+)/gm, '<li>$1</li>')
-        .replace(/(<li>.*<\/li>\n?)+/gs, m => '<ul>' + m + '</ul>')
-        .replace(/\n/g, '<br>');
+      el.innerHTML = content ? marked.parse(content) : '<p style="color:var(--muted)">Report generation failed — check the log for details.</p>';
       switchTab('report');
     }
 
@@ -938,9 +1021,10 @@
 
       // Reset UI
       document.getElementById('hosts-tbody').innerHTML = `
-      <tr id="empty-row"><td colspan="5"><div class="empty-state"><div class="big-icon">🛰️</div>Scanning…</div></td></tr>
+      <tr id="empty-row"><td colspan="6"><div class="empty-state"><div class="big-icon">🛰️</div>Scanning…</div></td></tr>
     `;
       Object.keys(hostRows).forEach(k => delete hostRows[k]);
+      Object.keys(hostCves).forEach(k => delete hostCves[k]);
       hostCount = 0; logCount = 0;
       document.getElementById('host-count').textContent = '0';
       document.getElementById('log-count').textContent = '0';

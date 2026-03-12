@@ -12,11 +12,13 @@ class NmapExecutor:
         self.logger = logging.getLogger("NmapExecutor")
         self.nmap_path = self._find_nmap()
 
-    def execute(self, command: str) -> Tuple[Optional[str], int]:
+    def execute(self, command: str, inject_vulners: bool = False) -> Tuple[Optional[str], int]:
         """
         Executes an Nmap command and returns the XML output + packet count.
         Args:
-            command (str): The full Nmap command line string.
+            command (str): The full Nmap command string.
+            inject_vulners (bool): If True, append --script vulners for CVE correlation.
+                                   Should only be True for Hunter Mode (Phase 3) scans.
         Returns:
             Tuple[str | None, int]: (raw XML output, estimated packet count).
         """
@@ -29,6 +31,18 @@ class NmapExecutor:
         if not command:
             self.logger.error("Command failed sanitization — skipping execution.")
             return None, 0
+
+        # Inject vulners NSE script only when explicitly requested (Hunter Mode).
+        # Injecting during broad Phase 2 scans causes NSE to probe the local Flask
+        # server with binary payloads, flooding the log with spurious 400 errors.
+
+        if inject_vulners and "vulners" not in command:
+            # vulners NSE script requires -sV to have version data to query against
+            if "-sV" not in command:
+                command += " -sV"
+                self.logger.info("Auto-injected '-sV' (required by vulners NSE script).")
+            command += " --script vulners"
+            self.logger.info("Auto-injected '--script vulners' for CVE correlation.")
 
         # Verify nmap is available
         if not self.nmap_path:
@@ -109,19 +123,26 @@ class NmapExecutor:
                 self.logger.warning(f"Stripped dangerous operator '{dangerous}' from command.")
                 command = command.split(dangerous)[0].strip()
 
-        # Fix --top-ports without a numeric argument
-        # Common LLM error: "nmap --top-ports 192.168.1.1" (missing count)
-        top_ports_match = re.search(r'--top-ports\s+(\S+)', command)
-        if top_ports_match:
-            value = top_ports_match.group(1)
-            if not value.isdigit():
-                self.logger.warning(
-                    f"--top-ports had non-numeric value '{value}', inserting default 1000."
-                )
-                command = command.replace(
-                    f"--top-ports {value}",
-                    f"--top-ports 1000 {value}"
-                )
+        # Fallback: if the AI used --top-ports despite prompt guidance, replace it with a
+        # comprehensive explicit port list. --top-ports misses critical service ports
+        # (MongoDB 27017, Redis 6379, BGP 179, etc.) and can't be safely supplemented
+        # with -p on all nmap versions. This only fires if the AI ignores the prompt.
+        SCAN_PORTS = (
+            "21,22,23,25,53,80,110,111,135,139,143,161,179,389,443,445,"
+            "465,512,513,514,587,636,873,993,995,1433,1521,2222,2375,"
+            "3000,3306,3389,5432,5900,5984,6379,8080,8443,8888,9090,"
+            "9200,9300,9600,11211,15672,27017,28017"
+        )
+        if "--top-ports" in command:
+            command = re.sub(r'--top-ports\s+\S+', f'-p {SCAN_PORTS}', command)
+            self.logger.warning(
+                "AI used --top-ports despite prompt guidance — replaced with explicit port list."
+            )
+
+        # Enforce T4 timing for LAN scans when the LLM omits a timing template.
+        # T4 is significantly faster than the T3 default with no reliability cost on LANs.
+        if not re.search(r'-T\d', command):
+            command += " -T4"
 
         return command
 

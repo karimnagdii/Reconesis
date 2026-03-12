@@ -76,13 +76,22 @@ class TOONParser:
                     or 'tls' in extra_info.lower()
                 )
 
+                # NSE script output (e.g. vulners, vulscan, http-title)
+                scripts = []
+                for script_elem in port_elem.findall('script'):
+                    script_id = script_elem.get('id', '')
+                    script_output = script_elem.get('output', '')
+                    if script_id:
+                        scripts.append({"id": script_id, "output": script_output})
+
                 ports.append({
                     "port": port_id,
                     "protocol": protocol,
                     "service": service_name,
                     "product": product,
                     "version": version,
-                    "auth_required": auth_required
+                    "auth_required": auth_required,
+                    "scripts": scripts
                 })
 
         return {

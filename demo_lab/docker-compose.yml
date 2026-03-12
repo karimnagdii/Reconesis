@@ -1,130 +1,236 @@
 version: '3.8'
 
 services:
-  # ─────────────────────────────────────────────
-  # CRITICAL ASSET 1: DATABASE SERVER (Port 5432)
-  # ─────────────────────────────────────────────
-  db_server:
+
+  # ── CRITICAL: PostgreSQL Database ──────────────────────────
+  db_postgres:
     image: postgres:15-alpine
-    container_name: demo_db_server
+    container_name: demo_db_postgres
     environment:
       POSTGRES_USER: admin
       POSTGRES_PASSWORD: password123
-      POSTGRES_DB: demo_db
+      POSTGRES_DB: corp_db
     networks:
       recon_net:
         ipv4_address: 172.20.0.10
 
-  # ─────────────────────────────────────────────
-  # CRITICAL ASSET 2: MAIL SERVER (Port 25)
-  # ─────────────────────────────────────────────
-  mail_server:
-    image: namshi/smtp
-    container_name: demo_mail_server
+  # ── CRITICAL: MySQL Database ───────────────────────────────
+  db_mysql:
+    image: mysql:8.0
+    container_name: demo_db_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass123
+      MYSQL_DATABASE: corp_app
+      MYSQL_USER: appuser
+      MYSQL_PASSWORD: apppass123
     networks:
       recon_net:
         ipv4_address: 172.20.0.11
 
-  # ─────────────────────────────────────────────
-  # WEB SERVER (Port 80)
-  # ─────────────────────────────────────────────
-  web_server:
-    image: nginx:alpine
-    container_name: demo_web_server
+  # ── CRITICAL: Redis Cache / DB ─────────────────────────────
+  db_redis:
+    image: redis:7-alpine
+    container_name: demo_db_redis
     networks:
       recon_net:
         ipv4_address: 172.20.0.12
 
-  # ─────────────────────────────────────────────
-  # GENERIC HOST (Port 22 - SSH)
-  # ─────────────────────────────────────────────
-  generic_host:
-    image: lscr.io/linuxserver/openssh-server:latest
-    container_name: demo_generic_host
+  # ── CRITICAL: MongoDB ──────────────────────────────────────
+  db_mongo:
+    image: mongo:6.0
+    container_name: demo_db_mongo
     environment:
-      - PUID=1000
-      - PGID=1000
-      - TZ=Etc/UTC
-      - USER_NAME=admin
-      - USER_PASSWORD=password123
-      - PASSWORD_ACCESS=true
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: mongopass123
     networks:
       recon_net:
         ipv4_address: 172.20.0.13
 
-  # ─────────────────────────────────────────────
-  # CRITICAL ASSET 3: ROUTER (Ports 22, 23, 161)
-  # Simulated via Alpine + socat listeners
-  # ─────────────────────────────────────────────
-  router:
+  # ── CRITICAL: Mail Server (SMTP + POP3 + IMAP + Submission) ─
+  mail_server:
     image: alpine:3.19
-    container_name: demo_router
+    container_name: demo_mail_server
     command: >
       sh -c "
-        apk add --no-cache socat openssh-server net-snmp &&
-        ssh-keygen -A &&
-        echo 'root:router123' | chpasswd &&
-        /usr/sbin/sshd &&
-        socat TCP-LISTEN:23,fork,reuseaddr SYSTEM:'echo Router Login:' &
-        snmpd -f -Lo -C --rwcommunity=public &
+        apk add --no-cache socat &&
+        socat TCP-LISTEN:25,fork,reuseaddr SYSTEM:'echo 220 mail.corp.local ESMTP Postfix (Ubuntu)' &
+        socat TCP-LISTEN:110,fork,reuseaddr SYSTEM:'echo +OK Dovecot POP3 server ready' &
+        socat TCP-LISTEN:143,fork,reuseaddr SYSTEM:'echo * OK [CAPABILITY IMAP4rev1] Dovecot ready' &
+        socat TCP-LISTEN:587,fork,reuseaddr SYSTEM:'echo 220 mail.corp.local ESMTP Submission' &
         tail -f /dev/null
       "
     networks:
       recon_net:
         ipv4_address: 172.20.0.14
 
-  # ─────────────────────────────────────────────
-  # CRITICAL ASSET 4: FIREWALL (Ports 22, 443, 8443)
-  # Simulated via Alpine + socat/nginx listeners
-  # ─────────────────────────────────────────────
-  firewall:
+  # ── CRITICAL: Core Router (SSH + Telnet + SNMP + BGP) ──────
+  router_core:
     image: alpine:3.19
-    container_name: demo_firewall
+    container_name: demo_router_core
     command: >
       sh -c "
-        apk add --no-cache socat openssh-server &&
+        apk add --no-cache socat openssh-server net-snmp &&
         ssh-keygen -A &&
-        echo 'root:fw123' | chpasswd &&
+        echo 'root:router123' | chpasswd &&
+        sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config &&
         /usr/sbin/sshd &&
-        socat TCP-LISTEN:443,fork,reuseaddr SYSTEM:'echo HTTPS Management' &
-        socat TCP-LISTEN:8443,fork,reuseaddr SYSTEM:'echo Firewall Admin' &
+        socat TCP-LISTEN:23,fork,reuseaddr SYSTEM:'echo Router Login:' &
+        snmpd -f -Lo -C --rwcommunity=public &
+        socat TCP-LISTEN:179,fork,reuseaddr SYSTEM:'echo BGP Ready' &
         tail -f /dev/null
       "
     networks:
       recon_net:
         ipv4_address: 172.20.0.15
 
-  # ─────────────────────────────────────────────
-  # NOISE: WORKSTATIONS 1-4 (Port 80 each)
-  # Low-value targets to test filtering accuracy
-  # ─────────────────────────────────────────────
+  # ── CRITICAL: Edge Firewall (SSH + HTTPS + Admin) ──────────
+  firewall_edge:
+    image: alpine:3.19
+    container_name: demo_firewall_edge
+    command: >
+      sh -c "
+        apk add --no-cache socat openssh-server &&
+        ssh-keygen -A &&
+        echo 'root:fw123' | chpasswd &&
+        sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config &&
+        /usr/sbin/sshd &&
+        socat TCP-LISTEN:443,fork,reuseaddr SYSTEM:'echo HTTPS Management Interface' &
+        socat TCP-LISTEN:8443,fork,reuseaddr SYSTEM:'echo Firewall Admin Portal' &
+        tail -f /dev/null
+      "
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.16
+
+  # ── STANDARD: Web Frontend (nginx HTTP 80) ─────────────────
+  web_frontend:
+    image: nginx:alpine
+    container_name: demo_web_frontend
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.20
+
+  # ── STANDARD: App Server (HTTP 80 + HTTP 8080) ─────────────
+  app_server:
+    image: alpine:3.19
+    container_name: demo_app_server
+    command: >
+      sh -c "
+        apk add --no-cache nginx socat &&
+        nginx &
+        socat TCP-LISTEN:8080,fork,reuseaddr SYSTEM:'echo HTTP/1.0 200 OK' &
+        tail -f /dev/null
+      "
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.21
+
+  # ── STANDARD: SSH Jump Box ─────────────────────────────────
+  jumpbox:
+    image: lscr.io/linuxserver/openssh-server:latest
+    container_name: demo_jumpbox
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Etc/UTC
+      - USER_NAME=admin
+      - USER_PASSWORD=jumppass123
+      - PASSWORD_ACCESS=true
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.22
+
+  # ── STANDARD: Monitoring Server (SSH + Grafana 3000 + Prom 9090) ─
+  monitoring:
+    image: alpine:3.19
+    container_name: demo_monitoring
+    command: >
+      sh -c "
+        apk add --no-cache socat openssh-server &&
+        ssh-keygen -A &&
+        echo 'root:monitor123' | chpasswd &&
+        sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config &&
+        /usr/sbin/sshd &&
+        socat TCP-LISTEN:3000,fork,reuseaddr SYSTEM:'echo HTTP/1.0 200 OK' &
+        socat TCP-LISTEN:9090,fork,reuseaddr SYSTEM:'echo HTTP/1.0 200 OK' &
+        tail -f /dev/null
+      "
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.23
+
+  # ── STANDARD: LDAP / Active Directory ─────────────────────
+  ldap_server:
+    image: alpine:3.19
+    container_name: demo_ldap_server
+    command: >
+      sh -c "
+        apk add --no-cache socat &&
+        socat TCP-LISTEN:389,fork,reuseaddr SYSTEM:'echo LDAP Ready' &
+        socat TCP-LISTEN:636,fork,reuseaddr SYSTEM:'echo LDAPS Ready' &
+        tail -f /dev/null
+      "
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.24
+
+  # ── NOISE: Workstations ────────────────────────────────────
   workstation_1:
     image: nginx:alpine
     container_name: demo_workstation_1
     networks:
       recon_net:
-        ipv4_address: 172.20.0.20
+        ipv4_address: 172.20.0.30
 
   workstation_2:
     image: nginx:alpine
     container_name: demo_workstation_2
     networks:
       recon_net:
-        ipv4_address: 172.20.0.21
+        ipv4_address: 172.20.0.31
 
   workstation_3:
     image: nginx:alpine
     container_name: demo_workstation_3
     networks:
       recon_net:
-        ipv4_address: 172.20.0.22
+        ipv4_address: 172.20.0.32
 
   workstation_4:
     image: nginx:alpine
     container_name: demo_workstation_4
     networks:
       recon_net:
-        ipv4_address: 172.20.0.23
+        ipv4_address: 172.20.0.33
+
+  workstation_5:
+    image: nginx:alpine
+    container_name: demo_workstation_5
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.34
+
+  workstation_6:
+    image: nginx:alpine
+    container_name: demo_workstation_6
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.35
+
+  # ── NOISE: Network Printers ────────────────────────────────
+  printer_1:
+    image: nginx:alpine
+    container_name: demo_printer_1
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.40
+
+  printer_2:
+    image: nginx:alpine
+    container_name: demo_printer_2
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.41
 
 networks:
   recon_net:

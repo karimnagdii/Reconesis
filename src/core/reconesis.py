@@ -7,6 +7,7 @@ from src.core.toon import TOONParser
 from src.core.executor import NmapExecutor
 from src.core.agent import GroqAgent
 from src.utils.criticality import CriticalityAssessor
+from src.utils.exploit_lookup import ExploitLookup
 from src.utils.config import Config
 
 
@@ -22,6 +23,7 @@ class ReconesisEngine:
         self.executor = NmapExecutor()
         self.agent = GroqAgent()
         self.assessor = CriticalityAssessor()
+        self.exploit_lookup = ExploitLookup()
         self.scan_history = []
 
         # Dashboard event stream hook
@@ -38,6 +40,30 @@ class ReconesisEngine:
             "time_per_host": 0.0,
             "decision_accuracy": 0.0
         }
+
+    @staticmethod
+    def _get_own_ips() -> set:
+        """Returns all local IP addresses so they can be excluded from scan targets."""
+        import socket
+        own_ips = {'127.0.0.1', '::1'}
+
+        # Method 1: hostname resolution (catches primary interface)
+        try:
+            hostname = socket.gethostname()
+            for info in socket.getaddrinfo(hostname, None):
+                own_ips.add(info[4][0])
+        except Exception:
+            pass
+
+        # Method 2: UDP connect trick — finds the IP used to reach the outside world
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(('8.8.8.8', 80))
+                own_ips.add(s.getsockname()[0])
+        except Exception:
+            pass
+
+        return own_ips
 
     def _log(self, msg: str, level: str = "info"):
         """Log and emit to dashboard simultaneously."""
@@ -91,6 +117,14 @@ class ReconesisEngine:
                     return
 
                 live_ips = [h['target'] for h in toon_hosts]
+
+                # Exclude own IPs — don't scan the machine running Reconesis
+                own_ips = self._get_own_ips()
+                excluded = [ip for ip in live_ips if ip in own_ips]
+                if excluded:
+                    self._log(f"Excluding own IP(s) from scan: {excluded}")
+                    live_ips = [ip for ip in live_ips if ip not in own_ips]
+
                 self._log(f"Discovered {len(live_ips)} live hosts: {live_ips}")
                 self._emit("hosts_found", {"hosts": live_ips})
 
@@ -220,7 +254,7 @@ class ReconesisEngine:
                 self._log("Agent returned no hunter command — stopping loop.", "warning")
                 break
 
-            hunter_xml, pkts = self.executor.execute(hunter_cmd)
+            hunter_xml, pkts = self.executor.execute(hunter_cmd, inject_vulners=True)
             self.metrics["total_packets"] += pkts
             if hunter_xml:
                 hunter_hosts = self.parser.parse(hunter_xml)
@@ -228,11 +262,14 @@ class ReconesisEngine:
                 hunter_map = {h['target']: h for h in hunter_hosts}
                 for host in all_detailed_hosts:
                     if host['target'] in hunter_map:
-                        # Enrich existing record with new port/version data
+                        # Merge hunter port data: replace existing ports with richer
+                        # hunter versions (which carry NSE script output), add new ones.
                         new_ports = hunter_map[host['target']].get('ports', [])
-                        existing_ports = {p['port'] for p in host.get('ports', [])}
+                        existing_port_idx = {p['port']: i for i, p in enumerate(host.get('ports', []))}
                         for p in new_ports:
-                            if p['port'] not in existing_ports:
+                            if p['port'] in existing_port_idx:
+                                host['ports'][existing_port_idx[p['port']]] = p
+                            else:
                                 host['ports'].append(p)
                         self._emit("host_enriched", {
                             "ip": host['target'],
@@ -245,6 +282,31 @@ class ReconesisEngine:
             # Proposal §4.3.4: "All flagged Critical have had full NSE scan → stop"
             self._log("All critical assets investigated. Termination criteria met.")
             break
+
+        # ---------------------------------------------------------------
+        # CVE ENRICHMENT — runs after all scans, before report generation
+        # ---------------------------------------------------------------
+        self._log("CVE Enrichment: correlating NSE script output and CPE lookups...")
+        self._emit("status", {"phase": "cve_enrichment"})
+
+        all_detailed_hosts = self.exploit_lookup.enrich_from_nse(all_detailed_hosts)
+        all_detailed_hosts = self.exploit_lookup.enrich_from_cpe(all_detailed_hosts)
+
+        # Emit per-host CVE data to the dashboard
+        for host in all_detailed_hosts:
+            cves = []
+            for port in host.get("ports", []):
+                for exploit in port.get("exploits", []):
+                    cves.append({
+                        "port": port["port"],
+                        "service": port["service"],
+                        "cve": exploit.get("cve", ""),
+                        "cvss": exploit.get("cvss", 0),
+                        "source": exploit.get("source", "")
+                    })
+            if cves:
+                self._emit("cves_found", {"ip": host["target"], "cves": cves})
+                self._log(f"  {host['target']}: {len(cves)} CVE(s) found")
 
         # ---------------------------------------------------------------
         # PHASE 4: FINAL REPORT
