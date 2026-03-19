@@ -171,6 +171,18 @@ class CriticalityAssessor:
             "os_keywords": ["synology dsm", "qnap qts", "freenas",
                             "truenas", "netapp ontap"],
         },
+        "Windows File Server": {
+            "port_exact":  {135, 139, 445},
+            "port_combo":  [
+                {445, 139},       # SMB + NetBIOS — Windows file sharing
+                {445, 135},       # SMB + RPC — Windows file sharing
+                {135, 139, 445},  # Full SMB stack — strongest Windows file server signal
+            ],
+            "services":    {"microsoft-ds", "netbios-ssn", "msrpc"},
+            "products":    ["windows server", "samba", "cifs", "microsoft-ds"],
+            "os_keywords": [],    # Intentionally empty — "windows server" duplicates AD/LDAP os_keywords
+                                  # and would falsely score any Windows member server as CRITICAL
+        },
     }
 
     # ── Point Weights ──────────────────────────────────────
