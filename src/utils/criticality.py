@@ -183,6 +183,18 @@ class CriticalityAssessor:
             "os_keywords": [],    # Intentionally empty — "windows server" duplicates AD/LDAP os_keywords
                                   # and would falsely score any Windows member server as CRITICAL
         },
+        "DNS Server": {
+            "port_exact":  {53, 953},
+            "port_combo":  [
+                {53, 953},        # DNS + BIND RNDC — BIND-specific, avoids router/forwarder false positives
+                                  # Note: standalone {53} intentionally omitted — routers/firewalls
+                                  # forwarding DNS would score CRITICAL, which is unacceptable noise
+            ],
+            "services":    {"domain"},
+            "products":    ["bind", "named", "powerdns", "unbound", "knot",
+                            "nsd", "microsoft dns", "dnsmasq"],
+            "os_keywords": [],    # DNS runs on generic OSes
+        },
     }
 
     # ── Point Weights ──────────────────────────────────────
