@@ -196,9 +196,11 @@ class GroqAgent:
         # Include previous findings for OODA loop context (Proposal §4.1)
         history_context = ""
         if previous_findings:
-            summary = json.dumps(previous_findings, indent=2)
+            # Cap to last 2 depths to keep payload under ~100KB (full history → 300KB by depth 3)
+            recent = previous_findings[-2:] if len(previous_findings) > 2 else previous_findings
+            summary = json.dumps(recent, indent=2)
             history_context = (
-                f"\n\nPrevious scan findings (use this context to refine your strategy):\n{summary}\n"
+                f"\n\nPrevious scan findings (depth {len(previous_findings)}, showing last 2):\n{summary}\n"
             )
 
         system_prompt = ""
