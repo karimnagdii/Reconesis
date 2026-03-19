@@ -4,88 +4,128 @@ This directory contains a pre-configured Docker network environment designed to 
 
 ## Architecture
 
-The lab creates an isolated Docker bridge network (`172.20.0.0/24`) with **20 containers** across three tiers: 7 critical infrastructure assets, 5 standard hosts, and 8 noise nodes.
+The lab creates an isolated Docker bridge network (`172.20.0.0/24`) with **31 containers** across eight tiers covering all 12 Reconesis classification profiles. Real services handle containers where Nmap `-sV` fingerprinting must work correctly; the rest use `alpine:3.19` + `socat` for banner-level classification signals.
 
 ---
 
-### Tier 1 — Critical Assets (should be flagged CRITICAL or HIGH)
+### Tier 1 — Databases (172.20.0.10–.13)
 
-| Container | IP Address | Simulated Identity | Exposed Services |
-| :--- | :--- | :--- | :--- |
-| `demo_db_postgres` | `172.20.0.10` | PostgreSQL Database | PostgreSQL (5432) |
-| `demo_db_mysql` | `172.20.0.11` | MySQL Database | MySQL (3306) |
-| `demo_db_redis` | `172.20.0.12` | Redis Cache/DB | Redis (6379) |
-| `demo_db_mongo` | `172.20.0.13` | MongoDB | MongoDB (27017) |
-| `demo_mail_server` | `172.20.0.14` | Mail Server | SMTP (25), POP3 (110), IMAP (143), Submission (587) |
-| `demo_router_core` | `172.20.0.15` | Core Router | SSH (22), Telnet (23), SNMP (161), BGP (179) |
-| `demo_firewall_edge` | `172.20.0.16` | Edge Firewall | SSH (22), HTTPS (443), Admin (8443) |
+| Container | IP | Profile | Services | Misconfiguration |
+|---|---|---|---|---|
+| `demo_db_postgres` | `.10` | Database Server | PostgreSQL (5432) | None |
+| `demo_db_mysql` | `.11` | Database Server | MySQL (3306) | None |
+| `demo_db_redis` | `.12` | Database Server | Redis (6379) | **No auth** — `redis-info` NSE connects unauthenticated |
+| `demo_db_mongo` | `.13` | Database Server | MongoDB (27017) | None |
 
-### Tier 2 — Standard Hosts (should score MEDIUM or LOW)
+### Tier 2 — Network Infrastructure (172.20.0.20–.23)
 
-| Container | IP Address | Simulated Identity | Exposed Services |
-| :--- | :--- | :--- | :--- |
-| `demo_web_frontend` | `172.20.0.20` | Nginx Web Server | HTTP (80) |
-| `demo_app_server` | `172.20.0.21` | Application Server | HTTP (80), HTTP (8080) |
-| `demo_jumpbox` | `172.20.0.22` | Bastion / Jump Host | SSH (22) |
-| `demo_monitoring` | `172.20.0.23` | Grafana + Prometheus | SSH (22), Grafana (3000), Prometheus (9090) |
-| `demo_ldap_server` | `172.20.0.24` | Active Directory / LDAP | LDAP (389), LDAPS (636) |
+| Container | IP | Profile | Services | Misconfiguration |
+|---|---|---|---|---|
+| `demo_router_core` | `.20` | Router | SSH(22)+Telnet(23)+SNMP(161)+BGP(179) | **SNMP community `public`** — `snmp-info` succeeds |
+| `demo_firewall_edge` | `.21` | Firewall | SSH(22)+HTTPS(443)+Admin(8443) | None |
+| `demo_jumpbox` | `.22` | Jump Host | SSH(22)+Bastion(2222) | None |
+| `demo_ldap_server` | `.23` | Active Directory / LDAP | LDAP(389)+LDAPS(636) | **Anonymous bind** — `ldap-search` returns entries |
 
-### Tier 3 — Noise (should score LOW and be deprioritised)
+### Tier 3 — Services (172.20.0.30–.33)
 
-| Container | IP Address | Simulated Identity | Exposed Services |
-| :--- | :--- | :--- | :--- |
-| `demo_workstation_1` | `172.20.0.30` | Corporate Workstation | HTTP (80) |
-| `demo_workstation_2` | `172.20.0.31` | Corporate Workstation | HTTP (80) |
-| `demo_workstation_3` | `172.20.0.32` | Corporate Workstation | HTTP (80) |
-| `demo_workstation_4` | `172.20.0.33` | Corporate Workstation | HTTP (80) |
-| `demo_workstation_5` | `172.20.0.34` | Corporate Workstation | HTTP (80) |
-| `demo_workstation_6` | `172.20.0.35` | Corporate Workstation | HTTP (80) |
-| `demo_printer_1` | `172.20.0.40` | Network Printer | HTTP (80) |
-| `demo_printer_2` | `172.20.0.41` | Network Printer | HTTP (80) |
+| Container | IP | Profile | Services | Misconfiguration |
+|---|---|---|---|---|
+| `demo_web_frontend` | `.30` | Web Server | HTTP(80)+HTTPS(443) | None |
+| `demo_app_server` | `.31` | Application Server | Tomcat(8080)+HTTPS-alt(8443) | None |
+| `demo_mail_server` | `.32` | Mail Server | SMTP(25)+POP3(110)+IMAP(143)+SMTPS(465)+Submission(587)+IMAPS(993)+POP3S(995) | **Open relay** — `smtp-open-relay` NSE detects relay |
+| `demo_dns_server` | `.33` | DNS Server | DNS(53)+RNDC(953) | **Zone transfer + recursion** — `dns-zone-transfer` + `dns-recursion` succeed |
+
+### Tier 4 — Storage (172.20.0.40–.41)
+
+| Container | IP | Profile | Services | Misconfiguration |
+|---|---|---|---|---|
+| `demo_nas` | `.40` | NAS Appliance | SMB(445)+rsync(873)+AFP(548)+NFS(2049)+DSM(5000+5001) | **Anonymous Samba share** — `smb-enum-shares` finds `[data]` |
+| `demo_winfs` | `.41` | Windows File Server | SMB(445)+MSRPC(135)+NetBIOS(139) | **SMB signing disabled** — `smb-security-mode` reports it |
+
+### Tier 5 — IoT Cameras (172.20.0.50–.51)
+
+| Container | IP | Profile | Services |
+|---|---|---|---|
+| `demo_camera_hikvision` | `.50` | IoT Camera | RTSP(554)+Management(8000)+ONVIF(8899) |
+| `demo_camera_dahua` | `.51` | IoT Camera | RTSP(554)+HTTP(80)+Dahua(37777) |
+
+### Tier 6 — Workstations (172.20.0.60–.65)
+
+| Container | IP | Expected Score | Notes |
+|---|---|---|---|
+| `demo_ws_1` | `.60` | LOW | Hardened workstation — SMB(445)+RDP(3389) |
+| `demo_ws_2` | `.61` | LOW | Hardened workstation — SMB(445)+RDP(3389) |
+| `demo_ws_3` | `.62` | LOW | Mixed OS — SMB(445)+SSH(22) |
+| `demo_ws_4` | `.63` | LOW | SMB signing disabled banner (classification only) |
+| `demo_ws_dev_1` | `.64` | LOW | Dev workstation — SSH(22)+HTTP(3000)+HTTP(8000) |
+| `demo_ws_dev_2` | `.65` | **CRITICAL NAS (intentional false positive)** | SSH(22)+HTTP(5000)+HTTP(5001) — port pair matches Synology DSM combo; documents port-only scoring limit |
+
+### Tier 7 — Printers / Copiers (172.20.0.70–.72)
+
+| Container | IP | Expected Score | Ports |
+|---|---|---|---|
+| `demo_printer_1` | `.70` | LOW | JetDirect(9100)+IPP(631) |
+| `demo_printer_2` | `.71` | LOW | JetDirect(9100)+IPP(631) |
+| `demo_copier` | `.72` | LOW | JetDirect(9100)+IPP(631)+HTTP(80)+SMB(445) |
+
+### Tier 8 — Specialty Noise (172.20.0.80–.85)
+
+| Container | IP | Identity | Expected Score |
+|---|---|---|---|
+| `demo_voip_1` | `.80` | VoIP phone | LOW |
+| `demo_voip_2` | `.81` | VoIP phone | LOW |
+| `demo_switch` | `.82` | Managed switch | Router CRITICAL (UDP scan) or HIGH (TCP-only) — non-deterministic |
+| `demo_ups` | `.83` | UPS / PDU | LOW |
+| `demo_videoconf` | `.84` | Video conferencing | Web Server HIGH or CRITICAL — non-deterministic |
+| `demo_accessctrl` | `.85` | Access controller | LOW |
 
 ---
 
 ## How to Run the Demo (Ubuntu)
 
 ### Prerequisites
+
 Run the setup script from the project root (one-time):
 ```bash
-chmod +x setup.sh
-./setup.sh
+chmod +x setup.sh && ./setup.sh
 ```
-This installs `nmap`, `docker`, `docker-compose`, and Python dependencies.
 
 ### 1. Start the Lab
+
 ```bash
 cd demo_lab
 docker-compose up -d
 ```
-First run downloads images — may take a few minutes.
+
+First run downloads images — may take several minutes. The mail server container installs aiosmtpd via pip at startup (~30s). Tomcat takes ~15s to become ready.
 
 ### 2. Verify the Lab is Running
+
 ```bash
-docker ps | grep demo_
-# Should show 20 containers
+docker ps | grep demo_ | wc -l
+# Should print 31
 ```
 
 ### 3. Run Reconesis (CLI)
-From the project root:
+
 ```bash
 source venv/bin/activate
 sudo venv/bin/python main.py --target 172.20.0.0/24 --verbose
 ```
-> **Note:** `sudo` is required because Nmap needs raw socket access for SYN scans on Linux.
+
+> `sudo` is required — Nmap needs raw socket access for SYN scans on Linux.
 
 ### 4. Run Reconesis (Dashboard)
-For a visual demo with live scan visibility:
+
 ```bash
 source venv/bin/activate
 sudo venv/bin/python dashboard.py
-# Open http://localhost:5000 in your browser
+# Open http://localhost:5000
 # Enter target: 172.20.0.0/24
 ```
 
 ### 5. Stop the Lab
+
 ```bash
 cd demo_lab
 docker-compose down
@@ -95,22 +135,31 @@ docker-compose down
 
 ## Expected Reconesis Output
 
-When pointed at `172.20.0.0/24`, Reconesis should:
+When pointed at `172.20.0.0/24`:
 
-1. **Scout Mode** — sweep the `/24` subnet and discover all 20 live containers.
-2. **Port Scan & Classification** — run targeted port scans and classify each host:
-   - `172.20.0.10` → **CRITICAL** — Database Server (PostgreSQL 5432)
-   - `172.20.0.11` → **CRITICAL** — Database Server (MySQL 3306)
-   - `172.20.0.12` → **CRITICAL** — Database Server (Redis 6379)
-   - `172.20.0.13` → **CRITICAL** — Database Server (MongoDB 27017)
-   - `172.20.0.14` → **CRITICAL** — Mail Server (SMTP + POP3 + IMAP + Submission)
-   - `172.20.0.15` → **CRITICAL** — Router (SSH + Telnet + SNMP + BGP)
-   - `172.20.0.16` → **CRITICAL** — Firewall (SSH + HTTPS + Admin)
-   - `172.20.0.20–.24` → **MEDIUM/LOW** — Standard hosts (web, app, jump, monitoring, LDAP)
-   - `172.20.0.30–.35` → **LOW** — Workstation noise (port 80 only)
-   - `172.20.0.40–.41` → **LOW** — Printer noise (port 80 only)
-3. **Hunter Mode** — execute deep targeted scans against the 7 critical assets using type-specific prompts (Database, Mail, Router/Firewall).
-4. **Report** — `scan_report.md` should mention all 4 database technologies (PostgreSQL, MySQL, Redis, MongoDB) plus mail server, router, and firewall findings.
+**CRITICAL** (triggers Hunter Mode):
+- `.10–.13` → Database Server
+- `.20` → Router
+- `.21` → Firewall
+- `.22` → Jump Host
+- `.23` → Active Directory / LDAP
+- `.30` → Web Server
+- `.31` → Application Server
+- `.32` → Mail Server
+- `.33` → DNS Server
+- `.40` → NAS Appliance
+- `.41` → Windows File Server
+- `.50, .51` → IoT Camera
+- `.65` → NAS Appliance (intentional false positive — port 5000+5001 pair)
+
+**HIGH / Variable** (non-deterministic):
+- `.82` → Router (CRITICAL if UDP scan hits port 161, HIGH otherwise)
+- `.84` → Web Server (CRITICAL if `-sV` run, otherwise below threshold)
+
+**LOW**:
+- `.60–.64` → Workstations
+- `.70–.72` → Printers
+- `.80, .81, .83, .85` → Generic Host
 
 ---
 
