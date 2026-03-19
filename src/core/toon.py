@@ -96,9 +96,9 @@ class TOONParser:
     def _parse_os(host_element) -> dict:
         """Extract OS name and accuracy from a <host> XML element."""
         os_elem = host_element.find('os')
-        if os_elem:
+        if os_elem is not None:
             os_match = os_elem.find('osmatch')
-            if os_match:
+            if os_match is not None:
                 return {
                     "name": os_match.get('name', 'unknown'),
                     "accuracy": int(os_match.get('accuracy', 0))
