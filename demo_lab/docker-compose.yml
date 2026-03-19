@@ -117,11 +117,9 @@ services:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     entrypoint: >
       sh -c "
+        apk add --no-cache openssl &&
         mkdir -p /etc/nginx/ssl &&
-        openssl req -x509 -nodes -days 365 -newkey rsa:2048
-          -keyout /etc/nginx/ssl/key.pem
-          -out /etc/nginx/ssl/cert.pem
-          -subj '/CN=corp.local/O=Corp/C=US' 2>/dev/null &&
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/nginx/ssl/key.pem -out /etc/nginx/ssl/cert.pem -subj '/CN=corp.local/O=Corp/C=US' 2>/dev/null &&
         exec nginx -g 'daemon off;'
       "
     networks:
@@ -129,7 +127,7 @@ services:
         ipv4_address: 172.20.0.30
 
   app_server:
-    image: tomcat:9.0-jdk17-temurin-alpine
+    image: tomcat:9.0-jdk17-temurin
     container_name: demo_app_server
     entrypoint: >
       sh -c "
