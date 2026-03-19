@@ -41,14 +41,9 @@ class TOONParser:
         ip_address = address_elem.get('addr') if address_elem is not None else "unknown"
 
         # OS detection
-        os_name = "unknown"
-        os_accuracy = 0
-        os_elem = host_element.find('os')
-        if os_elem:
-            os_match = os_elem.find('osmatch')
-            if os_match:
-                os_name = os_match.get('name', 'unknown')
-                os_accuracy = int(os_match.get('accuracy', 0))
+        os_info = self._parse_os(host_element)
+        os_name = os_info["name"]
+        os_accuracy = os_info["accuracy"]
 
         # Port parsing — includes auth_required field (proposal §4.2 TOON structure)
         ports = []
@@ -69,13 +64,7 @@ class TOONParser:
                 extra_info = service_elem.get('extrainfo', '') if service_elem is not None else ''
                 tunnel = service_elem.get('tunnel', '') if service_elem is not None else ''
 
-                # Infer auth_required: SSL tunneled services or known auth services
-                auth_required = (
-                    tunnel == 'ssl'
-                    or service_name in {'ssh', 'rdp', 'vnc', 'ftp', 'smtp', 'imap', 'pop3'}
-                    or 'auth' in extra_info.lower()
-                    or 'tls' in extra_info.lower()
-                )
+                auth_required = self._infer_auth(service_name, tunnel, extra_info)
 
                 # NSE script output (e.g. vulners, vulscan, http-title)
                 scripts = []
@@ -102,6 +91,29 @@ class TOONParser:
             "ports": ports,
             "criticality": "UNKNOWN"   # Set by CriticalityAssessor
         }
+
+    @staticmethod
+    def _parse_os(host_element) -> dict:
+        """Extract OS name and accuracy from a <host> XML element."""
+        os_elem = host_element.find('os')
+        if os_elem:
+            os_match = os_elem.find('osmatch')
+            if os_match:
+                return {
+                    "name": os_match.get('name', 'unknown'),
+                    "accuracy": int(os_match.get('accuracy', 0))
+                }
+        return {"name": "unknown", "accuracy": 0}
+
+    @staticmethod
+    def _infer_auth(service_name: str, tunnel: str, extra_info: str) -> bool:
+        """Infer whether a service requires authentication from service signals."""
+        return (
+            tunnel == 'ssl'
+            or service_name in {'ssh', 'rdp', 'vnc', 'ftp', 'smtp', 'imap', 'pop3'}
+            or 'auth' in extra_info.lower()
+            or 'tls' in extra_info.lower()
+        )
 
     def to_json(self, toon_objects):
         return json.dumps(toon_objects, indent=2)
