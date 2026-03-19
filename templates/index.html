@@ -974,6 +974,7 @@
       if (batchTimeout) clearTimeout(batchTimeout);
       batchTimeout = setTimeout(() => {
         pendingHostUpdates.forEach(h => upsertHostDirect(h));
+        document.getElementById('m-total').textContent = hostCount;
         pendingHostUpdates = [];
         sortHosts();
         batchTimeout = null;
@@ -1036,7 +1037,6 @@
 
         case 'host_assessed':
           queueHostUpdate(data);
-          document.getElementById('m-total').textContent = hostCount;
           break;
 
         case 'host_enriched':
