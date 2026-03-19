@@ -135,7 +135,7 @@ class ReconesisEngine:
             self._log("PHASE 2: SCOUT MODE — Port Scan & Asset Classification")
             self._emit("status", {"phase": "assessment"})
 
-            max_retries = 3
+            max_retries = 2
             phase2_success = False
             detailed_hosts = []
 
@@ -150,7 +150,7 @@ class ReconesisEngine:
                 if not port_scan_cmd:
                     self._log(f"Agent returned no port scan command (attempt {attempt}/{max_retries}).", "warning")
                     if attempt < max_retries:
-                        # Exponential backoff: 1s, 2s, 4s
+                        # Exponential backoff: 1s, 2s
                         backoff = 2 ** (attempt - 1)
                         self._log(f"Retrying in {backoff} seconds...")
                         time.sleep(backoff)
