@@ -25,17 +25,24 @@ logging.basicConfig(
 logger = logging.getLogger("Dashboard")
 
 # Global scan state
-scan_active = False
-event_queue: queue.Queue = queue.Queue()
+scan_event = threading.Event()   # set = scan running, clear = idle
+event_queue: queue.Queue = queue.Queue(maxsize=500)
 
 
 def run_scan(target: str):
     """Runs the ReconesisEngine in a background thread and pushes events to the queue."""
-    global scan_active
-    scan_active = True
+    scan_event.set()
 
     def emit(event_type: str, data: dict):
-        event_queue.put({"type": event_type, "data": data})
+        item = {"type": event_type, "data": data}
+        try:
+            event_queue.put_nowait(item)
+        except queue.Full:
+            try:
+                event_queue.get_nowait()  # drop oldest event
+            except queue.Empty:
+                pass
+            event_queue.put_nowait(item)
 
     try:
         engine = ReconesisEngine(event_callback=emit)
@@ -45,7 +52,7 @@ def run_scan(target: str):
         emit("log", {"level": "error", "message": f"Fatal engine error: {e}"})
         emit("done", {"message": "Scan ended with errors."})
     finally:
-        scan_active = False
+        scan_event.clear()
 
 
 # ─────────────────────────────────────────────
@@ -58,9 +65,7 @@ def index():
 
 @app.route("/start", methods=["POST"])
 def start_scan():
-    global scan_active, event_queue
-
-    if scan_active:
+    if scan_event.is_set():
         return jsonify({"error": "A scan is already running."}), 409
 
     data = request.get_json()
@@ -74,8 +79,17 @@ def start_scan():
         logger.error(f"Pre-scan validation failed: {error_msg}")
         return jsonify({"error": error_msg}), 400
 
-    # Fresh queue for each scan
-    event_queue = queue.Queue()
+    # Drain stale events from previous scan (capped to prevent Flask thread block)
+    drained = 0
+    while not event_queue.empty() and drained < 1000:
+        try:
+            event_queue.get_nowait()
+            drained += 1
+        except queue.Empty:
+            break
+    if drained >= 1000:
+        logger.warning(f"Queue drain capped; {event_queue.qsize()} stale events remain")
+
     thread = threading.Thread(target=run_scan, args=(target,), daemon=True)
     thread.start()
     logger.info(f"Scan started on target: {target}")
@@ -111,7 +125,7 @@ def stream():
 
 @app.route("/status")
 def status():
-    return jsonify({"scan_active": scan_active})
+    return jsonify({"scan_active": scan_event.is_set()})
 
 
 if __name__ == "__main__":
