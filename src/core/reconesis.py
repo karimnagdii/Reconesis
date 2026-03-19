@@ -2,7 +2,6 @@
 import logging
 import json
 import time
-import hashlib
 from src.core.toon import TOONParser
 from src.core.executor import NmapExecutor
 from src.core.agent import GroqAgent
@@ -20,7 +19,6 @@ class ReconesisEngine:
         """
         self.logger = logging.getLogger("ReconesisEngine")
         self.parser = TOONParser()
-        self.executor = NmapExecutor()
         self.agent = GroqAgent()
         self.assessor = CriticalityAssessor()
         self.exploit_lookup = ExploitLookup()
@@ -28,6 +26,9 @@ class ReconesisEngine:
 
         # Dashboard event stream hook
         self._emit = event_callback if event_callback else lambda t, d: None
+
+        # Executor constructed AFTER self._emit so it can receive the callback
+        self.executor = NmapExecutor(event_callback=self._emit)
 
         # Evaluation metrics (proposal §5)
         self.metrics = {
@@ -38,7 +39,7 @@ class ReconesisEngine:
             "critical_hosts": 0,
             "total_packets": 0,
             "time_per_host": 0.0,
-            "decision_accuracy": 0.0
+            "critical_ratio": 0.0
         }
 
     @staticmethod
@@ -200,7 +201,6 @@ class ReconesisEngine:
             current_hash = self.parser.compute_hash(detailed_hosts)
             if current_hash in seen_hashes:
                 self._log("Hash saturation detected — no new information. Stopping loop.")
-                all_detailed_hosts = detailed_hosts  # Use last data
                 break
             seen_hashes.add(current_hash)
             all_detailed_hosts = detailed_hosts
@@ -231,6 +231,20 @@ class ReconesisEngine:
 
             self.metrics["total_hosts"] = len(detailed_hosts)
             self.metrics["critical_hosts"] = len(critical_targets)
+
+            # --- Populate scan_history so subsequent LLM calls get real context ---
+            self.scan_history.append({
+                "depth": depth,
+                "hosts": [
+                    {
+                        "ip": h["target"],
+                        "type": h.get("type", "Unknown"),
+                        "criticality": h.get("criticality", "UNKNOWN"),
+                        "ports": [p["port"] for p in h.get("ports", [])]
+                    }
+                    for h in classified
+                ]
+            })
 
             # --- Criticality Fulfilment Check (proposal §4.3.4) ---
             if not critical_targets:
@@ -278,10 +292,10 @@ class ReconesisEngine:
             else:
                 self._log("Hunter scan produced no output.", "warning")
 
-            # After hunter scan, all critical assets have been investigated
-            # Proposal §4.3.4: "All flagged Critical have had full NSE scan → stop"
-            self._log("All critical assets investigated. Termination criteria met.")
-            break
+            # Update live_ips from current results so the next depth iteration
+            # scans the same (now fully enriched) host set — BUG-03 fix.
+            live_ips = [h['target'] for h in all_detailed_hosts]
+            self._log(f"Depth {depth} complete. Continuing OODA loop...")
 
         # ---------------------------------------------------------------
         # CVE ENRICHMENT — runs after all scans, before report generation
@@ -336,9 +350,7 @@ class ReconesisEngine:
 
         if total_hosts > 0:
             self.metrics["time_per_host"] = round(elapsed / total_hosts, 2)
-            # Decision accuracy: % of correctly identified critical/non-critical (known demo targets)
-            # For display, we show critical ratio as a proxy metric
-            self.metrics["decision_accuracy"] = round((critical / total_hosts) * 100, 1)
+            self.metrics["critical_ratio"] = round((critical / total_hosts) * 100, 1)
 
         self._emit("metrics", self.metrics)
         self._emit("done", {"message": "Reconesis scan complete."})
