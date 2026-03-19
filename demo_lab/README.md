@@ -53,11 +53,11 @@ The lab creates an isolated Docker bridge network (`172.20.0.0/24`) with **31 co
 
 | Container | IP | Expected Score | Notes |
 |---|---|---|---|
-| `demo_ws_1` | `.60` | LOW | Hardened workstation — SMB(445)+RDP(3389) |
-| `demo_ws_2` | `.61` | LOW | Hardened workstation — SMB(445)+RDP(3389) |
-| `demo_ws_3` | `.62` | LOW | Mixed OS — SMB(445)+SSH(22) |
-| `demo_ws_4` | `.63` | LOW | SMB signing disabled banner (classification only) |
-| `demo_ws_dev_1` | `.64` | LOW | Dev workstation — SSH(22)+HTTP(3000)+HTTP(8000) |
+| `demo_ws_1` | `.60` | HIGH | Hardened workstation — SMB(445)+RDP(3389) |
+| `demo_ws_2` | `.61` | HIGH | Hardened workstation — SMB(445)+RDP(3389) |
+| `demo_ws_3` | `.62` | HIGH | Mixed OS — SMB(445)+SSH(22) |
+| `demo_ws_4` | `.63` | HIGH | SMB signing disabled banner (classification only) |
+| `demo_ws_dev_1` | `.64` | HIGH | Dev workstation — SSH(22)+HTTP(3000)+HTTP(8000) |
 | `demo_ws_dev_2` | `.65` | **CRITICAL NAS (intentional false positive)** | SSH(22)+HTTP(5000)+HTTP(5001) — port pair matches Synology DSM combo; documents port-only scoring limit |
 
 ### Tier 7 — Printers / Copiers (172.20.0.70–.72)
@@ -76,7 +76,7 @@ The lab creates an isolated Docker bridge network (`172.20.0.0/24`) with **31 co
 | `demo_voip_2` | `.81` | VoIP phone | LOW |
 | `demo_switch` | `.82` | Managed switch | Router CRITICAL (UDP scan) or HIGH (TCP-only) — non-deterministic |
 | `demo_ups` | `.83` | UPS / PDU | LOW |
-| `demo_videoconf` | `.84` | Video conferencing | Web Server HIGH or CRITICAL — non-deterministic |
+| `demo_videoconf` | `.84` | Video conferencing | Web Server CRITICAL — ports 80+443 score 7 points (port_exact +4, combo +3) |
 | `demo_accessctrl` | `.85` | Access controller | LOW |
 
 ---
@@ -154,10 +154,11 @@ When pointed at `172.20.0.0/24`:
 
 **HIGH / Variable** (non-deterministic):
 - `.82` → Router (CRITICAL if UDP scan hits port 161, HIGH otherwise)
-- `.84` → Web Server (CRITICAL if `-sV` run, otherwise below threshold)
+
+**HIGH**:
+- `.60–.64` → Workstations (Windows File Server profile — port 445 triggers +2 points)
 
 **LOW**:
-- `.60–.64` → Workstations
 - `.70–.72` → Printers
 - `.80, .81, .83, .85` → Generic Host
 
