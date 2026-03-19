@@ -6,6 +6,7 @@ import time
 import re
 import shutil
 import platform
+import threading
 from typing import Optional, Tuple
 
 
@@ -71,12 +72,31 @@ class NmapExecutor:
                 text=True
             )
 
+            # Drain pipes in background threads to prevent pipe-buffer deadlock.
+            # Nmap XML output for /24 scans can exceed 64KB (Linux pipe buffer limit),
+            # causing proc.poll() to block forever if we don't consume the pipes.
+            stdout_chunks: list = []
+            stderr_chunks: list = []
+
+            def _read_stdout():
+                stdout_chunks.append(proc.stdout.read())
+
+            def _read_stderr():
+                stderr_chunks.append(proc.stderr.read())
+
+            stdout_thread = threading.Thread(target=_read_stdout, daemon=True)
+            stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
+            stdout_thread.start()
+            stderr_thread.start()
+
             start = time.time()
             last_heartbeat = start
             while proc.poll() is None:
                 elapsed = time.time() - start
                 if elapsed > 300:
                     proc.kill()
+                    stdout_thread.join(timeout=5)
+                    stderr_thread.join(timeout=5)
                     self.logger.error("Nmap timed out after 300s")
                     return None, 0
                 if time.time() - last_heartbeat >= 10:
@@ -84,7 +104,10 @@ class NmapExecutor:
                     last_heartbeat = time.time()
                 time.sleep(1)
 
-            stdout, stderr = proc.communicate()
+            stdout_thread.join()
+            stderr_thread.join()
+            stdout = stdout_chunks[0] if stdout_chunks else ""
+            stderr = stderr_chunks[0] if stderr_chunks else ""
 
             # Extract packet count from stderr (Nmap prints "Raw packets sent" to stderr)
             packets = self._parse_packet_count(stderr + stdout)
@@ -103,6 +126,7 @@ class NmapExecutor:
             return stdout, packets
 
         except subprocess.TimeoutExpired:
+            # Not reachable: timeout is enforced by the manual proc.kill() in the poll loop above.
             self.logger.error("Nmap scan timed out after 300 seconds.")
             return None, 0
         except Exception as e:
