@@ -1,7 +1,4 @@
 
-from src.utils.config import Config
-
-
 class CriticalityAssessor:
     """
     Multi-signal criticality assessment engine.
@@ -64,6 +61,7 @@ class CriticalityAssessor:
             "port_combo":  [
                 {22, 443},        # SSH + HTTPS management (proposal §4.3.2)
                 {443, 8443},      # Dual HTTPS management interfaces
+                {22, 443, 8443},  # SSH + dual-HTTPS — disambiguates from web servers
             ],
             "services":    set(),
             "products":    ["fortios", "fortigate", "palo alto", "panos",
@@ -95,6 +93,84 @@ class CriticalityAssessor:
                             "huawei vrp",
                             "nokia sros"],
         },
+        "Active Directory / LDAP": {
+            "port_exact":  {389, 636, 3268, 3269, 88},
+            "port_combo":  [
+                {389},            # LDAP alone — unambiguous directory service
+                {389, 636},       # LDAP + LDAPS
+                {3268, 3269},     # Global Catalog — Windows AD exclusive
+            ],
+            "services":    {"ldap", "ldaps"},
+            "products":    ["active directory", "openldap", "samba",
+                            "389 directory", "microsoft ldap"],
+            "os_keywords": ["windows server", "windows 2016",
+                            "windows 2019", "windows 2022"],
+        },
+        "Jump Host": {
+            "port_exact":  {2222, 22222},
+            "port_combo":  [
+                {2222},           # Non-standard SSH — canonical bastion signal
+            ],
+            "services":    set(),   # empty: avoids false positives on generic SSH hosts
+            "products":    [],
+            "os_keywords": [],
+        },
+        "Web Server": {
+            "port_exact":  {80, 443, 8080, 8443, 8000, 8888},
+            "port_combo":  [
+                {80},             # HTTP alone — unambiguous web signal (enables service/product points)
+                {443},            # HTTPS alone
+                {80, 443},        # HTTP + HTTPS pair
+                {80, 8443},
+                {80, 8080},
+            ],
+            "services":    {"http", "https", "http-alt"},
+            "products":    ["apache httpd", "nginx", "iis",
+                            "lighttpd", "caddy", "haproxy", "apache"],
+            "os_keywords": [],
+        },
+        "Application Server": {
+            "port_exact":  {8080, 8443, 4848, 9990, 7001, 7002},
+            "port_combo":  [
+                {8080},           # HTTP-alt alone — strong app server signal
+                {8080, 8443},     # App server HTTP + HTTPS pair
+            ],
+            "services":    {"http-alt", "websm"},
+            "products":    ["tomcat", "apache tomcat", "jboss", "wildfly",
+                            "weblogic", "glassfish", "websphere",
+                            "jetty", "gunicorn", "uvicorn", "spring", "payara"],
+            "os_keywords": [],
+        },
+        "IoT Camera": {
+            "port_exact":  {554, 1935, 8899, 37777, 8001, 8081},
+            "port_combo":  [
+                {554},            # RTSP alone — primary streaming protocol, almost exclusively cameras
+                {554, 8899},      # RTSP + ONVIF — definitive IP camera signal
+                {554, 37777},     # RTSP + Dahua proprietary — unambiguous Dahua camera
+                {554, 8000},      # RTSP + HikVision management port
+                {554, 8080},      # RTSP + HTTP management
+            ],
+            "services":    {"rtsp", "rtmp"},
+            "products":    ["hikvision", "dahua", "axis", "vivotek", "foscam",
+                            "amcrest", "reolink", "hanwha", "uniview",
+                            "camera", "ipcam", "netcam"],
+            "os_keywords": [],
+        },
+        "NAS Appliance": {
+            "port_exact":  {548, 873, 2049, 3260, 5000, 5001},
+            "port_combo":  [
+                {548},            # AFP alone — file-serving protocol, almost exclusively NAS
+                {2049},           # NFS alone — unambiguous network file system
+                {3260},           # iSCSI alone — block-level storage, unambiguous
+                {5000, 5001},     # Synology DSM HTTP + HTTPS pair — vendor-specific
+                {8080, 873},      # QNAP admin + rsync — NAS-specific combo (8080 alone excluded to avoid App Server collision)
+            ],
+            "services":    {"nfs", "afp", "rsync", "iscsi"},
+            "products":    ["synology", "qnap", "netapp", "truenas", "freenas",
+                            "dsm", "qts", "ontap", "drobo", "asustor"],
+            "os_keywords": ["synology dsm", "qnap qts", "freenas",
+                            "truenas", "netapp ontap"],
+        },
     }
 
     # ── Point Weights ──────────────────────────────────────
@@ -109,7 +185,7 @@ class CriticalityAssessor:
     HIGH_THRESHOLD     = 2     # Score >= 2 → HIGH
 
     def __init__(self):
-        self.critical_ports = Config.CRITICAL_PORTS
+        pass
 
     def assess(self, toon_host: dict) -> dict:
         """
@@ -155,18 +231,27 @@ class CriticalityAssessor:
                     score += self.W_PORT_COMBO
                     reasons.append(f"Port combo {sorted(combo)} present (+{self.W_PORT_COMBO})")
 
+            # Require at least one port signal before service/product points count.
+            # This prevents false positives (e.g. a monitoring server running HTTP on
+            # port 3000 matching "Web Server" via service name alone).
+            has_port_signal = bool(matched_ports) or any(
+                combo.issubset(port_numbers) for combo in profile.get("port_combo", [])
+            )
+
             # 3. Service names (nmap service field)
-            matched_services = services & profile["services"]
-            if matched_services:
-                pts = self.W_SERVICE * len(matched_services)
-                score += pts
-                reasons.append(f"Services {sorted(matched_services)} matched (+{pts})")
+            if has_port_signal:
+                matched_services = services & profile["services"]
+                if matched_services:
+                    pts = self.W_SERVICE * len(matched_services)
+                    score += pts
+                    reasons.append(f"Services {sorted(matched_services)} matched (+{pts})")
 
             # 4. Product strings (substring match in product+version)
-            for keyword in profile["products"]:
-                if keyword in all_products:
-                    score += self.W_PRODUCT
-                    reasons.append(f"Product '{keyword}' found (+{self.W_PRODUCT})")
+            if has_port_signal:
+                for keyword in profile["products"]:
+                    if keyword in all_products:
+                        score += self.W_PRODUCT
+                        reasons.append(f"Product '{keyword}' found (+{self.W_PRODUCT})")
 
             # 5. OS fingerprint keywords (strongest signal)
             if os_name and os_name != "unknown":
@@ -198,16 +283,10 @@ class CriticalityAssessor:
         else:
             level = "LOW"
 
-        # Fallback: if no category scored, check for generic high-value (web server)
+        # Fallback: if no category scored at all, classify as Generic Host
         if best_score == 0:
-            if 22 in port_numbers and (80 in port_numbers or 443 in port_numbers):
-                best_category = "Web Server/Admin Console"
-                level = "MEDIUM"
-                category_reasons[best_category] = ["SSH with web interface detected"]
-                best_score = 1
-            else:
-                best_category = "Generic Host"
-                category_reasons[best_category] = []
+            best_category = "Generic Host"
+            category_reasons[best_category] = []
 
         return {
             "level": level,
