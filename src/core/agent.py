@@ -263,6 +263,12 @@ class GroqAgent:
                 system_prompt = hunter_web_prompt
             elif any(k in t for t in types_present for k in ["iot camera", "camera"]):
                 system_prompt = hunter_iot_prompt
+            elif any(k in t for t in types_present for k in ["nas appliance"]):
+                system_prompt = hunter_nas_prompt
+            elif any(k in t for t in types_present for k in ["windows file server"]):
+                system_prompt = hunter_winfs_prompt
+            elif any(k in t for t in types_present for k in ["dns server"]):
+                system_prompt = hunter_dns_prompt
             else:
                 system_prompt = hunter_generic_prompt
 
