@@ -85,6 +85,113 @@ class GroqAgent:
             + output_rule
         )
 
+        # System Prompt 6: Hunter Mode — Active Directory / LDAP
+        hunter_ldap_prompt = (
+            "You are the 'Hunter' module of Reconesis targeting an Active Directory / LDAP Server. "
+            "Your goal is to enumerate directory services, identify exposed accounts, check for "
+            "anonymous bind vulnerabilities, and identify privilege escalation vectors. "
+            "Use version detection (-sV) and relevant NSE scripts such as "
+            "ldap-search, ldap-brute, ldap-rootdse, msrpc-enum, smb-security-mode, "
+            "krb5-enum-users (if port 88 is open), dns-srv-enum. "
+            "Scan all standard LDAP ports: 389, 636, 3268, 3269, 88."
+            + output_rule
+        )
+
+        # System Prompt 7: Hunter Mode — Jump Host / Bastion
+        hunter_jump_prompt = (
+            "You are the 'Hunter' module of Reconesis targeting a Jump Host / Bastion Server. "
+            "Your goal is to identify SSH hardening posture, check for weak authentication, "
+            "enumerate supported key exchange and cipher algorithms, and identify whether "
+            "multi-factor authentication is enforced. "
+            "Use version detection (-sV) and relevant NSE scripts such as "
+            "ssh-auth-methods, ssh-hostkey, ssh2-enum-algos, banner. "
+            "Scan both standard SSH (22) and non-standard bastion ports (2222, 22222)."
+            + output_rule
+        )
+
+        # System Prompt 8: Hunter Mode — Web Server
+        hunter_web_prompt = (
+            "You are the 'Hunter' module of Reconesis targeting a Web Server. "
+            "Your goal is to identify the web technology stack, enumerate directories "
+            "and virtual hosts, check for common web vulnerabilities, and find exposed "
+            "admin interfaces. "
+            "Use version detection (-sV) and relevant NSE scripts such as "
+            "http-title, http-headers, http-enum, http-methods, http-server-header, "
+            "http-vuln-cve2017-5638, http-shellshock, http-robots.txt, http-git. "
+            "Scan all common web ports: 80, 443, 8080, 8443, 8000, 8888."
+            + output_rule
+        )
+
+        # System Prompt 9: Hunter Mode — Application Server
+        hunter_app_prompt = (
+            "You are the 'Hunter' module of Reconesis targeting an Application Server. "
+            "Your goal is to identify the middleware platform, find exposed management "
+            "consoles, check for Java deserialization vulnerabilities, and enumerate "
+            "deployed applications. "
+            "Use version detection (-sV) and relevant NSE scripts such as "
+            "http-title, http-enum, http-auth-finder, http-default-accounts, "
+            "http-vuln-cve2010-0738 (JBoss), ajp-headers, ajp-request. "
+            "Scan app server ports: 8080, 8443, 4848, 9990, 7001, 7002."
+            + output_rule
+        )
+
+        # System Prompt 10: Hunter Mode — IoT Camera
+        hunter_iot_prompt = (
+            "You are the 'Hunter' module of Reconesis targeting an IoT IP Camera. "
+            "Your goal is to enumerate RTSP stream URLs, identify the camera make/model, "
+            "check for default credentials on the web management interface, and detect "
+            "known firmware vulnerabilities. "
+            "Use version detection (-sV) and relevant NSE scripts such as "
+            "rtsp-url-brute, rtsp-methods, http-default-accounts, http-auth-finder, "
+            "http-title, http-methods. "
+            "Scan all standard camera ports: 554 (RTSP), 1935 (RTMP), 8000, 8080, 8888 "
+            "(management), 8899 (ONVIF), 37777 (Dahua)."
+            + output_rule
+        )
+
+        # System Prompt 11: Hunter Mode — NAS Appliance
+        hunter_nas_prompt = (
+            "You are the 'Hunter' module of Reconesis targeting a NAS Appliance. "
+            "Your goal is to enumerate file shares, check for default credentials on the web "
+            "management interface, test for anonymous NFS and SMB access, and detect known "
+            "firmware vulnerabilities (including QNAP QLocker/DeadBolt and Synology CVEs). "
+            "SMB enumeration is included because NAS devices universally offer SMB shares "
+            "alongside NFS and AFP. "
+            "Use version detection (-sV) and relevant NSE scripts such as "
+            "smb-enum-shares, smb-security-mode, nfs-ls, nfs-showmount, ftp-anon, "
+            "http-default-accounts, http-auth-finder, http-title. "
+            "Scan all standard NAS ports: 21 (FTP), 22 (SSH), 80, 139, 443, 445 (SMB), "
+            "548 (AFP), 873 (rsync), 2049 (NFS), 3260 (iSCSI), 5000, 5001 (Synology DSM), "
+            "8080 (QNAP)."
+            + output_rule
+        )
+
+        # System Prompt 12: Hunter Mode — Windows File Server
+        hunter_winfs_prompt = (
+            "You are the 'Hunter' module of Reconesis targeting a Windows File Server. "
+            "Your goal is to enumerate SMB shares and their permissions, verify SMB signing "
+            "enforcement, check for null session access, test for EternalBlue (MS17-010) and "
+            "other critical SMB vulnerabilities, and enumerate RPC endpoints. "
+            "Use version detection (-sV) and relevant NSE scripts such as "
+            "smb-enum-shares, smb-vuln-ms17-010, smb-security-mode, smb-os-discovery, "
+            "msrpc-enum, smb-vuln-ms10-054. "
+            "Scan all standard Windows file sharing ports: 135 (MSRPC), 139 (NetBIOS), "
+            "445 (SMB), 3389 (RDP)."
+            + output_rule
+        )
+
+        # System Prompt 13: Hunter Mode — DNS Server
+        hunter_dns_prompt = (
+            "You are the 'Hunter' module of Reconesis targeting a DNS Server. "
+            "Your goal is to test for zone transfer (AXFR) misconfiguration, verify whether "
+            "open recursion is enabled, fingerprint the resolver version via NSID, and detect "
+            "DNS cache snooping vulnerabilities. "
+            "Use version detection (-sV) and relevant NSE scripts such as "
+            "dns-zone-transfer, dns-nsid, dns-cache-snoop, dns-recursion, dns-service-discovery. "
+            "Scan all standard DNS server ports: 53 (DNS), 953 (BIND RNDC)."
+            + output_rule
+        )
+
         # ── BUILD CONTEXT ──────────────────────────────────────────────
         # Include previous findings for OODA loop context (Proposal §4.1)
         history_context = ""
@@ -116,10 +223,14 @@ class GroqAgent:
                 f"Targets (live hosts): {targets_str}\n"
                 "Reconnaissance phase: Port Scan & Service Detection.\n"
                 "Objective: Identify open ports and running services on these hosts to classify them as:\n"
-                "  - Database servers (MySQL, PostgreSQL, MongoDB, Redis, Elasticsearch, MSSQL, Oracle)\n"
-                "  - Mail servers (SMTP, IMAP, POP3, submission)\n"
-                "  - Network infrastructure (routers with SSH/Telnet/BGP, firewalls with HTTPS/alt-HTTPS)\n"
-                "  - Web servers, admin consoles, or any other high-value services\n"
+                "  - Database servers (MySQL/3306, PostgreSQL/5432, MongoDB/27017, Redis/6379, MSSQL/1433, Oracle/1521)\n"
+                "  - Mail servers (SMTP/25, IMAP/143, POP3/110, Submission/587)\n"
+                "  - Network infrastructure: routers (SSH/22+Telnet/23+BGP/179), firewalls (SSH/22+HTTPS/443+8443)\n"
+                "  - Active Directory / LDAP servers (LDAP/389, LDAPS/636, Global Catalog/3268-3269, Kerberos/88)\n"
+                "  - Jump Hosts / Bastion servers (non-standard SSH on port 2222 or 22222)\n"
+                "  - Web servers (HTTP/80, HTTPS/443, HTTP-alt/8080, 8443)\n"
+                "  - Application servers (Tomcat/JBoss/WildFly on 8080, 8443, 4848, 9990, 7001, 7002)\n"
+                "  - IoT Cameras (RTSP/554, RTMP/1935, ONVIF/8899, HikVision/8000, Dahua/37777)\n"
                 "Requirements:\n"
                 "- Use SYN stealth scan (-sS) with version detection (-sV)\n"
                 "- Use an explicit -p flag with a port list broad enough to cover all the asset types above\n"
@@ -142,6 +253,16 @@ class GroqAgent:
                 system_prompt = hunter_mail_prompt
             elif any(k in t for t in types_present for k in ["router", "firewall"]):
                 system_prompt = hunter_infra_prompt
+            elif any(k in t for t in types_present for k in ["active directory", "ldap"]):
+                system_prompt = hunter_ldap_prompt
+            elif any(k in t for t in types_present for k in ["jump host"]):
+                system_prompt = hunter_jump_prompt
+            elif any(k in t for t in types_present for k in ["application server"]):
+                system_prompt = hunter_app_prompt
+            elif any(k in t for t in types_present for k in ["web server"]):
+                system_prompt = hunter_web_prompt
+            elif any(k in t for t in types_present for k in ["iot camera", "camera"]):
+                system_prompt = hunter_iot_prompt
             else:
                 system_prompt = hunter_generic_prompt
 
@@ -155,19 +276,50 @@ class GroqAgent:
                 + history_context
             )
 
-        return self._query_groq(system_prompt, user_prompt)
+        result, _ = self._query_groq(system_prompt, user_prompt)
+        return result
 
     def analyze_results(self, toon_data: list) -> str:
         """
         Analyzes the final TOON data to produce a summary report.
+        Uses a longer timeout and explicit token cap for multi-page reports.
+        If the model hits the token limit, makes one continuation call to complete the report.
         """
         system_prompt, user_prompt = self._build_analysis_prompt(toon_data)
-        return self._query_groq(system_prompt, user_prompt)
+        report, finish_reason = self._query_groq(
+            system_prompt, user_prompt, timeout=120, max_tokens=4096
+        )
 
-    def _query_groq(self, system_prompt: str, user_prompt: str) -> str:
+        if finish_reason == "length" and report:
+            self.logger.warning(
+                "Report was truncated (finish_reason=length). Requesting continuation..."
+            )
+            continuation_system = (
+                "You are a Senior Cybersecurity Analyst. "
+                "The report below was cut off due to length. "
+                "Continue writing from exactly where it stopped. "
+                "Do not repeat any content that has already been written. "
+                "Complete all remaining sections: "
+                "# Recommended Remediation Actions and # Conclusion."
+            )
+            continuation_user = (
+                f"The report so far:\n\n{report}\n\n"
+                "Continue from where the report was cut off."
+            )
+            continuation, _ = self._query_groq(
+                continuation_system, continuation_user, timeout=120, max_tokens=2048
+            )
+            if continuation:
+                report = report + "\n" + continuation
+
+        return report
+
+    def _query_groq(self, system_prompt: str, user_prompt: str,
+                    timeout: int = 30, max_tokens: int = None) -> tuple:
         """
         Sends a request to the Groq API using proper system/user message roles
         for stronger instruction-following.
+        Returns (content, finish_reason) tuple.
         """
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -181,14 +333,18 @@ class GroqAgent:
             ],
             "stream": False
         }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
         try:
-            response = requests.post(self.api_url, headers=headers, json=payload, timeout=30)
+            response = requests.post(self.api_url, headers=headers, json=payload, timeout=timeout)
             response.raise_for_status()
             data = response.json()
+            choice = data["choices"][0]
             # Strip markdown code fences if the LLM wraps output
-            result = data["choices"][0]["message"]["content"].strip()
+            result = choice["message"]["content"].strip()
             result = result.replace("```", "").replace("`", "").strip()
-            return result
+            finish_reason = choice.get("finish_reason", "stop")
+            return result, finish_reason
         except requests.exceptions.HTTPError as e:
             status_code = e.response.status_code if e.response else "unknown"
             self.logger.error(f"Groq API HTTP error ({status_code}): {e}")
@@ -196,16 +352,16 @@ class GroqAgent:
                 self.logger.error(f"Response body: {e.response.text[:500]}")
                 if status_code == 401:
                     self.logger.error("API authentication failed — check your GROQ_API_KEY")
-            return ""
+            return "", "error"
         except requests.exceptions.Timeout:
-            self.logger.error("Groq API request timed out after 30 seconds")
-            return ""
+            self.logger.error(f"Groq API request timed out after {timeout} seconds")
+            return "", "error"
         except requests.exceptions.RequestException as e:
             self.logger.error(f"Groq API connection error: {e}")
-            return ""
+            return "", "error"
         except (KeyError, ValueError) as e:
             self.logger.error(f"Failed to parse Groq API response: {e}")
-            return ""
+            return "", "error"
 
     @staticmethod
     def _slim_toon(toon_data: list) -> list:
@@ -260,14 +416,22 @@ class GroqAgent:
         system_prompt = (
             "You are a Senior Cybersecurity Analyst reviewing the results of an automated "
             "network reconnaissance scan performed by the Reconesis engine. "
-            "Write a professional Final Report in Markdown format. "
+            "Write a professional Final Report in Markdown format.\n\n"
+            "FORMATTING AND TONE RULES — follow these exactly:\n"
+            "1. Use formal, technical English. No casual language.\n"
+            "2. Do NOT use emoji characters anywhere in the report — "
+            "not in headings, bullet points, tables, or body text.\n"
+            "3. Use plain numbered or bulleted lists for all enumerations.\n"
+            "4. You MUST complete ALL sections listed below, even if a section has "
+            "only brief content. Do not omit any section.\n\n"
             "You MUST structure the report with these exact sections:\n\n"
             "# Executive Summary\n"
             "A brief overview of the scan scope, methodology, and key findings.\n\n"
             "# Network Topology Overview\n"
             "A summary of discovered hosts and their roles on the network.\n\n"
             "# Critical Assets Identified\n"
-            "A table of critical infrastructure found (Routers, Firewalls, Mail Servers, Databases) "
+            "A table of critical infrastructure found (Databases, Mail Servers, Routers, Firewalls, "
+            "Active Directory/LDAP, Jump Hosts, Web Servers, Application Servers) "
             "with their IP, type, open ports, and risk level.\n\n"
             "# Risk Assessment\n"
             "Per-asset risk analysis with specific vulnerability details and potential impact. "
