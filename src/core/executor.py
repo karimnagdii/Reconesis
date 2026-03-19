@@ -1,6 +1,8 @@
 
+import os
 import subprocess
 import logging
+import time
 import re
 import shutil
 import platform
@@ -8,9 +10,10 @@ from typing import Optional, Tuple
 
 
 class NmapExecutor:
-    def __init__(self):
+    def __init__(self, event_callback=None):
         self.logger = logging.getLogger("NmapExecutor")
         self.nmap_path = self._find_nmap()
+        self._emit = event_callback or (lambda t, d: None)
 
     def execute(self, command: str, inject_vulners: bool = False) -> Tuple[Optional[str], int]:
         """
@@ -60,27 +63,44 @@ class NmapExecutor:
             if "-oX -" not in command:
                 command += " -oX -"
 
-            result = subprocess.run(
+            proc = subprocess.Popen(
                 command,
                 shell=True,
-                capture_output=True,
-                text=True,
-                check=False,     # Don't raise exception on non-zero exit
-                timeout=300      # 5 minute hard timeout
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
             )
 
-            if result.returncode != 0:
-                self.logger.warning(f"Nmap returned non-zero exit code: {result.returncode}")
-                self.logger.warning(f"Stderr: {result.stderr}")
+            start = time.time()
+            last_heartbeat = start
+            while proc.poll() is None:
+                elapsed = time.time() - start
+                if elapsed > 300:
+                    proc.kill()
+                    self.logger.error("Nmap timed out after 300s")
+                    return None, 0
+                if time.time() - last_heartbeat >= 10:
+                    self._emit("log", {"level": "info", "message": f"Nmap running… ({elapsed:.0f}s elapsed)"})
+                    last_heartbeat = time.time()
+                time.sleep(1)
 
-            # --- Extract packet count from stderr (Proposal §5: Traffic Volume) ---
-            packets = self._parse_packet_count(result.stderr)
+            stdout, stderr = proc.communicate()
 
-            if not result.stdout or not result.stdout.strip():
-                self.logger.error(f"Nmap produced no output. Stderr: {result.stderr}")
+            # Extract packet count from stderr (Nmap prints "Raw packets sent" to stderr)
+            packets = self._parse_packet_count(stderr + stdout)
+
+            if not stdout or not stdout.strip():
+                self.logger.error(f"Nmap produced no output. Stderr: {stderr}")
                 return None, packets
 
-            return result.stdout, packets
+            # Intentional: non-zero exit is logged but not treated as failure.
+            # Nmap exits 1 on partial scans (e.g., permission warnings) but still
+            # returns valid XML. Returning None here would silently discard usable data.
+            if proc.returncode != 0:
+                self.logger.warning(f"Nmap returned non-zero exit code: {proc.returncode}")
+                self.logger.warning(f"Stderr: {stderr}")
+
+            return stdout, packets
 
         except subprocess.TimeoutExpired:
             self.logger.error("Nmap scan timed out after 300 seconds.")
@@ -131,7 +151,7 @@ class NmapExecutor:
             "21,22,23,25,53,80,110,111,135,139,143,161,179,389,443,445,"
             "465,512,513,514,587,636,873,993,995,1433,1521,2222,2375,"
             "3000,3306,3389,5432,5900,5984,6379,8080,8443,8888,9090,"
-            "9200,9300,9600,11211,15672,27017,28017"
+            "9200,9300,9600,11211,15672,27017,28017,554,1935,8000,8899,37777"
         )
         if "--top-ports" in command:
             command = re.sub(r'--top-ports\s+\S+', f'-p {SCAN_PORTS}', command)
@@ -139,10 +159,17 @@ class NmapExecutor:
                 "AI used --top-ports despite prompt guidance — replaced with explicit port list."
             )
 
-        # Enforce T4 timing for LAN scans when the LLM omits a timing template.
-        # T4 is significantly faster than the T3 default with no reliability cost on LANs.
+        # Timing template: default T4 (aggressive, fast on LANs).
+        # Override via NMAP_TIMING_TEMPLATE env var (valid: T0-T5).
+        # Note: env var is read inside the guard so it's only evaluated when needed.
         if not re.search(r'-T\d', command):
-            command += " -T4"
+            default_timing = os.getenv("NMAP_TIMING_TEMPLATE", "T4")
+            if not re.fullmatch(r'T[0-5]', default_timing):
+                self.logger.warning(
+                    f"Invalid NMAP_TIMING_TEMPLATE '{default_timing}', falling back to T4"
+                )
+                default_timing = "T4"
+            command += f" -{default_timing}"
 
         return command
 
