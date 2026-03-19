@@ -1,4 +1,5 @@
 
+import hashlib
 import xml.etree.ElementTree as ET
 import json
 import logging
@@ -110,6 +111,5 @@ class TOONParser:
         Computes a stable hash of the TOON data for hash-saturation detection.
         Proposal §4.3.4: stop if subsequent scans produce identical hashes.
         """
-        import hashlib
         serialized = json.dumps(toon_objects, sort_keys=True)
         return hashlib.sha256(serialized.encode()).hexdigest()
