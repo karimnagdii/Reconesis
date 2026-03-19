@@ -66,7 +66,7 @@ The lab creates an isolated Docker bridge network (`172.20.0.0/24`) with **31 co
 |---|---|---|---|
 | `demo_printer_1` | `.70` | LOW | JetDirect(9100)+IPP(631) |
 | `demo_printer_2` | `.71` | LOW | JetDirect(9100)+IPP(631) |
-| `demo_copier` | `.72` | LOW | JetDirect(9100)+IPP(631)+HTTP(80)+SMB(445) |
+| `demo_copier` | `.72` | **CRITICAL (Web Server — false positive)** | JetDirect(9100)+IPP(631)+HTTP(80)+SMB(445) — port 80 scores Web Server CRITICAL (port_exact +2, combo +3 = 5) |
 
 ### Tier 8 — Specialty Noise (172.20.0.80–.85)
 
@@ -76,7 +76,7 @@ The lab creates an isolated Docker bridge network (`172.20.0.0/24`) with **31 co
 | `demo_voip_2` | `.81` | VoIP phone | LOW |
 | `demo_switch` | `.82` | Managed switch | Router CRITICAL (UDP scan) or HIGH (TCP-only) — non-deterministic |
 | `demo_ups` | `.83` | UPS / PDU | LOW |
-| `demo_videoconf` | `.84` | Video conferencing | Web Server CRITICAL — ports 80+443 score 7 points (port_exact +4, combo +3) |
+| `demo_videoconf` | `.84` | Video conferencing | Web Server CRITICAL — ports 80+443 score 13 points (port_exact +4, three combos +9) |
 | `demo_accessctrl` | `.85` | Access controller | LOW |
 
 ---
@@ -151,16 +151,21 @@ When pointed at `172.20.0.0/24`:
 - `.41` → Windows File Server
 - `.50, .51` → IoT Camera
 - `.65` → NAS Appliance (intentional false positive — port 5000+5001 pair)
+- `.72` → Web Server (false positive — copier with port 80)
+- `.84` → Web Server (false positive — videoconf with ports 80+443)
 
 **HIGH / Variable** (non-deterministic):
 - `.82` → Router (CRITICAL if UDP scan hits port 161, HIGH otherwise)
 
 **HIGH**:
-- `.60–.64` → Workstations (Windows File Server profile — port 445 triggers +2 points)
+- `.60–.63` → Workstations (Windows File Server profile — port 445 triggers +2 points)
+- `.64` → Dev workstation (Web Server profile — port 8000 triggers +2 points)
 
 **LOW**:
-- `.70–.72` → Printers
+- `.70, .71` → Printers
 - `.80, .81, .83, .85` → Generic Host
+
+**Note:** `.72` (copier) and `.84` (videoconf) will score CRITICAL as false positives — port 80 alone (copier) and ports 80+443 (videoconf) trigger the Web Server profile. These are documented above in their tier tables.
 
 ---
 
