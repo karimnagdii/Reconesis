@@ -183,8 +183,9 @@ class ReconesisEngine:
         self.metrics["critical_hosts"] = len(critical_targets)
         return classified, critical_targets
 
-    def _run_hunter(self, critical_targets: list) -> None:
-        """Phase 3: deep scan on critical assets. Merges richer port data into self._all_hosts in place."""
+    def _run_hunter(self, critical_targets: list) -> bool:
+        """Phase 3: deep scan on critical assets. Merges richer port data into self._all_hosts in place.
+        Returns False if no hunter command was generated (caller should break the OODA loop)."""
         self._log(f"PHASE 3: HUNTER MODE — Deep scan on {len(critical_targets)} critical assets")
         self._emit("status", {"phase": "hunter", "targets": critical_targets})
 
@@ -197,7 +198,7 @@ class ReconesisEngine:
 
         if not hunter_cmd:
             self._log("Agent returned no hunter command — stopping loop.", "warning")
-            return
+            return False
 
         hunter_xml, pkts = self.executor.execute(hunter_cmd, inject_vulners=True)
         self.metrics["total_packets"] += pkts
@@ -219,6 +220,7 @@ class ReconesisEngine:
                     })
         else:
             self._log("Hunter scan produced no output.", "warning")
+        return True
 
     def _run_cve_enrichment(self) -> None:
         """CVE enrichment pass. Reassigns self._all_hosts (enrich functions return new lists)."""
@@ -351,7 +353,8 @@ class ReconesisEngine:
                 self._log("No critical targets found — termination criteria met.")
                 break
 
-            self._run_hunter(critical_targets)
+            if not self._run_hunter(critical_targets):
+                break
 
             # Update live_ips for next depth from enriched results
             live_ips = [h['target'] for h in self._all_hosts]
