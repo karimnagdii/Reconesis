@@ -153,31 +153,57 @@ class ReconesisEngine:
         return []
 
     def _classify_hosts(self, detailed_hosts: list) -> tuple:
-        """Classify hosts by criticality. Emits host_assessed events. Returns (classified, critical_targets).
-        Caller is responsible for updating self.scan_history."""
-        critical_targets = []
-        classified = []
+        """
+        Hybrid classification: static scoring extracts evidence, one LLM call
+        classifies all hosts, labels merged before critical_targets is assembled.
+        Returns (classified, critical_targets).
+        """
+        static_results = {}    # ip -> assess() return value
+        evidence_bundles = []  # list of evidence bundle dicts
 
+        # ── Pass 1: Static scoring + build evidence bundles ─────────────────
         for host in detailed_hosts:
             assessment = self.assessor.assess(host)
-            host['criticality'] = assessment['level']
-            host['type'] = assessment['type']
-            host['metrics'] = assessment['reasons']
+            static_results[host["target"]] = assessment
+            # Set initial labels (may be overwritten by LLM in Pass 2)
+            host["criticality"] = assessment["level"]
+            host["type"] = assessment["type"]
+            host["metrics"] = assessment["reasons"]
+            evidence_bundles.append(
+                self.assessor.build_evidence_bundle(host, assessment)
+            )
+
+        # ── LLM classification call ──────────────────────────────────────────
+        self._emit("status", {"message": "Classifying hosts with AI..."})
+        llm_results = self.agent.classify_hosts(evidence_bundles)
+        if not llm_results:
+            self._log("AI classification unavailable — using static labels.", "warning")
+        llm_lookup = {r["ip"]: r for r in llm_results}
+
+        # ── Pass 2: Merge LLM labels + emit + assemble critical_targets ──────
+        classified = []
+        critical_targets = []
+
+        for host in detailed_hosts:
+            llm = llm_lookup.get(host["target"])
+            if llm:
+                host["type"] = llm.get("type", host["type"])
+                host["criticality"] = llm.get("criticality", host["criticality"])
             classified.append(host)
 
             self._log(
-                f"Host {host['target']} → [{assessment['type']}] ({assessment['level']})"
+                f"Host {host['target']} → [{host['type']}] ({host['criticality']})"
             )
             self._emit("host_assessed", {
-                "ip": host['target'],
-                "type": assessment['type'],
-                "criticality": assessment['level'],
-                "ports": host['ports'],
-                "reasons": assessment['reasons']
+                "ip": host["target"],
+                "type": host["type"],
+                "criticality": host["criticality"],
+                "ports": host["ports"],
+                "reasons": host["metrics"],
             })
 
-            if assessment['level'] in ["CRITICAL", "HIGH"]:
-                critical_targets.append({"ip": host['target'], "type": assessment['type']})
+            if host["criticality"] in ("CRITICAL", "HIGH"):
+                critical_targets.append({"ip": host["target"], "type": host["type"]})
 
         self.metrics["total_hosts"] = len(detailed_hosts)
         self.metrics["critical_hosts"] = len(critical_targets)
