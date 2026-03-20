@@ -67,6 +67,19 @@ class ReconesisEngine:
 
         return own_ips
 
+    @staticmethod
+    def _is_richer(new_port: dict, existing_port: dict) -> bool:
+        """Returns True if new_port adds version, product, script, or exploit data that existing lacks."""
+        if new_port.get("version") and not existing_port.get("version"):
+            return True
+        if new_port.get("product") and not existing_port.get("product"):
+            return True
+        if new_port.get("scripts") and not existing_port.get("scripts"):
+            return True
+        if new_port.get("exploits") and not existing_port.get("exploits"):
+            return True
+        return False
+
     def _log(self, msg: str, level: str = "info"):
         """Log and emit to dashboard simultaneously."""
         getattr(self.logger, level)(msg)
