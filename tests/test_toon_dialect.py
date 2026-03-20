@@ -167,3 +167,112 @@ class TestSerializeReport:
         host = _host(type_="Mystery Device", crit="LOW")
         result = ToonDialect.serialize_report([host])
         assert result.split()[1] == "G"
+
+
+# ── serialize_classify ──────────────────────────────────────────────────────
+
+def _bundle(ip="10.0.0.1", top_type="Database Server", top_score=8,
+            runner_type="Web Server", runner_score=2,
+            os_dict=None, ports=None):
+    """Build a minimal evidence bundle as produced by build_evidence_bundle()."""
+    return {
+        "ip": ip,
+        "ports": ports or [{"port": 5432, "service": "postgresql",
+                             "product": "PostgreSQL DB", "version": "9.6.0"}],
+        "os": os_dict,  # None means unknown
+        "hostname": None,
+        "static": {
+            "top_type": top_type,
+            "top_score": top_score,
+            "signals": [f"Ports [5432] matched (+2)"],
+            "runner_up": {"type": runner_type, "score": runner_score},
+        },
+        "scripts": {},
+    }
+
+
+class TestSerializeClassify:
+
+    def test_host_line_with_os(self):
+        b = _bundle(os_dict={"name": "Linux 4.15", "accuracy": 85})
+        result = ToonDialect.serialize_classify([b])
+        assert result.startswith("10.0.0.1 D C Linux-4.15")
+
+    def test_host_line_no_os(self):
+        b = _bundle(os_dict=None)
+        result = ToonDialect.serialize_classify([b])
+        first_line = result.splitlines()[0]
+        assert first_line == "10.0.0.1 D C"
+
+    def test_m_line_present(self):
+        b = _bundle(top_score=8, runner_score=2)
+        result = ToonDialect.serialize_classify([b])
+        assert " M: D:8>W:2" in result
+
+    def test_m_line_uses_type_aliases(self):
+        b = _bundle(top_type="Mail Server", top_score=5,
+                    runner_type="Generic Host", runner_score=0)
+        result = ToonDialect.serialize_classify([b])
+        assert " M: M:5>G:0" in result
+
+    def test_criticality_critical_from_score(self):
+        # top_score >= CRITICAL_THRESHOLD (4) → C
+        b = _bundle(top_score=6)
+        result = ToonDialect.serialize_classify([b])
+        assert result.split()[2] == "C"
+
+    def test_criticality_high_from_score(self):
+        # top_score >= HIGH_THRESHOLD (2) but < CRITICAL_THRESHOLD → H
+        b = _bundle(top_score=3)
+        result = ToonDialect.serialize_classify([b])
+        assert result.split()[2] == "H"
+
+    def test_criticality_medium_from_score(self):
+        b = _bundle(top_score=1)
+        result = ToonDialect.serialize_classify([b])
+        assert result.split()[2] == "M"
+
+    def test_criticality_low_from_zero_score(self):
+        b = _bundle(top_score=0)
+        result = ToonDialect.serialize_classify([b])
+        assert result.split()[2] == "L"
+
+    def test_port_line_no_auth_no_star(self):
+        # Evidence bundles have no auth_required field
+        b = _bundle(ports=[{"port": 5432, "service": "postgresql",
+                             "product": "", "version": ""}])
+        result = ToonDialect.serialize_classify([b])
+        assert "5432*" not in result
+        assert " 5432 " in result
+
+    def test_port_line_no_exploits(self):
+        b = _bundle()
+        result = ToonDialect.serialize_classify([b])
+        assert "[" not in result
+
+    def test_port_product_version_formatted(self):
+        b = _bundle(ports=[{"port": 5432, "service": "postgresql",
+                             "product": "PostgreSQL DB", "version": "9.6.0"}])
+        result = ToonDialect.serialize_classify([b])
+        assert "PostgreSQL-DB/9.6.0" in result
+
+    def test_multiple_hosts_blank_line_separator(self):
+        b1 = _bundle("10.0.0.1")
+        b2 = _bundle("10.0.0.2", top_type="Web Server")
+        result = ToonDialect.serialize_classify([b1, b2])
+        assert "\n\n" in result
+
+    def test_scripts_dropped(self):
+        b = _bundle()
+        b["scripts"] = {"http-title": "Apache Default Page"}
+        result = ToonDialect.serialize_classify([b])
+        assert "http-title" not in result
+        assert "Apache" not in result
+
+    def test_port_indent_one_space(self):
+        b = _bundle(ports=[{"port": 5432, "service": "postgresql",
+                             "product": "", "version": ""}])
+        result = ToonDialect.serialize_classify([b])
+        port_line = [l for l in result.splitlines() if "5432" in l and "M:" not in l][0]
+        assert port_line.startswith(" ")
+        assert not port_line.startswith("  ")

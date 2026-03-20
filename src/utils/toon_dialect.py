@@ -114,7 +114,65 @@ class ToonDialect:
 
     @staticmethod
     def serialize_classify(evidence_bundles: list) -> str:
-        raise NotImplementedError
+        """
+        Serialize evidence bundles to dialect for classify_hosts() call.
+        Type/Criticality shown are static scorer guesses for LLM to verify.
+        No auth_required or exploits in bundles — omit * and [].
+        """
+        blocks = []
+        for bundle in evidence_bundles:
+            static     = bundle.get("static", {})
+            top_type   = static.get("top_type", "Generic Host")
+            top_score  = static.get("top_score", 0)
+            runner     = static.get("runner_up", {})
+            runner_type  = runner.get("type", "Generic Host")
+            runner_score = runner.get("score", 0)
+
+            type_alias   = _TYPE_ALIAS.get(top_type, "G")
+            runner_alias = _TYPE_ALIAS.get(runner_type, "G")
+
+            if top_score >= _CRIT_THRESHOLD:
+                crit_alias = "C"
+            elif top_score >= _HIGH_THRESHOLD:
+                crit_alias = "H"
+            elif top_score > 0:
+                crit_alias = "M"
+            else:
+                crit_alias = "L"
+
+            os_dict = bundle.get("os")
+            os_part = ""
+            if os_dict and os_dict.get("name"):
+                os_name = os_dict["name"]
+                if os_name.lower() not in ("unknown", "none", ""):
+                    os_part = " " + os_name.replace(" ", "-")
+
+            line1  = f"{bundle['ip']} {type_alias} {crit_alias}{os_part}"
+            m_line = f" M: {type_alias}:{top_score}>{runner_alias}:{runner_score}"
+
+            port_lines = []
+            for p in bundle.get("ports", []):
+                port_num = p["port"]
+                service  = p.get("service", "")
+                product  = p.get("product", "").replace(" ", "-")
+                version  = p.get("version", "")
+
+                prod_field = ""
+                if product or version:
+                    if product and version:
+                        prod_field = f" {product}/{version}"
+                    elif product:
+                        prod_field = f" {product}"
+                    else:
+                        prod_field = f" /{version}"
+
+                svc_field = f" {service}" if service else ""
+                port_lines.append(f" {port_num}{svc_field}{prod_field}")
+
+            block_lines = [line1, m_line] + port_lines
+            blocks.append("\n".join(block_lines))
+
+        return "\n\n".join(blocks)
 
     @staticmethod
     def compress_history(scan_history: list) -> str:
