@@ -1,4 +1,6 @@
 
+import re
+import time
 import requests
 import json
 import logging
@@ -437,7 +439,26 @@ class GroqAgent:
             status_code = e.response.status_code if e.response else "unknown"
             self.logger.error(f"Groq API HTTP error ({status_code}): {e}")
             if e.response is not None:
-                self.logger.error(f"Response body: {e.response.text[:500]}")
+                body = e.response.text[:500]
+                self.logger.error(f"Response body: {body}")
+                if status_code == 429:
+                    # Parse suggested wait time from error body (e.g. "try again in 26.6s")
+                    match = re.search(r"try again in (\d+\.?\d*)s", body)
+                    wait = float(match.group(1)) + 1 if match else 30
+                    self.logger.warning(f"Rate limited — waiting {wait:.1f}s then retrying once")
+                    time.sleep(wait)
+                    try:
+                        response = requests.post(self.api_url, headers=headers, json=payload, timeout=timeout)
+                        response.raise_for_status()
+                        data = response.json()
+                        choice = data["choices"][0]
+                        result = choice["message"]["content"].strip()
+                        if strip_backticks:
+                            result = result.replace("```", "").replace("`", "").strip()
+                        return result, choice.get("finish_reason", "stop")
+                    except Exception as retry_err:
+                        self.logger.error(f"Retry after rate limit also failed: {retry_err}")
+                        return "", "error"
                 if status_code == 401:
                     self.logger.error("API authentication failed — check your GROQ_API_KEY")
             return "", "error"
