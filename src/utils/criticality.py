@@ -318,3 +318,54 @@ class CriticalityAssessor:
             "reasons": category_reasons.get(best_category, []),
             "scores": category_scores    # Expose all scores for debugging / dashboard
         }
+
+    def build_evidence_bundle(self, host_toon: dict, assessment: dict) -> dict:
+        """
+        Build a structured evidence bundle for LLM classification.
+        Combines raw TOON data with the static scoring breakdown.
+        """
+        # Flatten per-port scripts to a host-level dict
+        scripts = {}
+        for port in host_toon.get("ports", []):
+            for script in port.get("scripts", []):
+                scripts[script["id"]] = script["output"]
+
+        # OS: convert "unknown" sentinel to None so LLM gets clean data
+        os_raw = host_toon.get("os", {})
+        os_out = None if os_raw.get("name", "unknown") == "unknown" else os_raw
+
+        # Top score: scores dict has 12 named profiles, no "Generic Host" key
+        top_type = assessment["type"]
+        top_score = assessment["scores"].get(top_type, 0)
+
+        # Runner-up: second-highest scoring named profile
+        sorted_scores = sorted(assessment["scores"].items(), key=lambda x: x[1], reverse=True)
+        if len(sorted_scores) >= 2:
+            runner_up = {"type": sorted_scores[1][0], "score": sorted_scores[1][1]}
+        else:
+            runner_up = {"type": "Generic Host", "score": 0}
+
+        # Port data: only fields the LLM needs (no scripts, auth_required, protocol)
+        ports = [
+            {
+                "port": p["port"],
+                "service": p.get("service", ""),
+                "product": p.get("product", ""),
+                "version": p.get("version", ""),
+            }
+            for p in host_toon.get("ports", [])
+        ]
+
+        return {
+            "ip": host_toon["target"],
+            "ports": ports,
+            "os": os_out,
+            "hostname": None,
+            "static": {
+                "top_type": top_type,
+                "top_score": top_score,
+                "signals": assessment["reasons"],
+                "runner_up": runner_up,
+            },
+            "scripts": scripts,
+        }
