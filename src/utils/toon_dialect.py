@@ -29,8 +29,8 @@ _SOURCE_CODE = {
     "circl":   "c",
 }
 
-_CRIT_THRESHOLD  = CriticalityAssessor.CRITICAL_THRESHOLD
-_HIGH_THRESHOLD  = CriticalityAssessor.HIGH_THRESHOLD
+_CRIT_THRESHOLD  = CriticalityAssessor.CRITICAL_THRESHOLD  # used by serialize_classify
+_HIGH_THRESHOLD  = CriticalityAssessor.HIGH_THRESHOLD       # used by serialize_classify
 
 
 class ToonDialect:
