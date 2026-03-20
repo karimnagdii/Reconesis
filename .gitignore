@@ -58,3 +58,18 @@ NEWLOG
 
 # Archives
 *.zip
+
+# Claude Code tooling
+CLAUDE.md
+docs/superpowers/
+
+# AI-generated audit/report artifacts
+CODE_AUDIT_REPORT.md
+PERFORMANCE_AUDIT.md
+PERFORMANCE_QUICK_FIXES.md
+Reconesis_Report.md
+IMPORTANTTTTTTTT.txt
+
+# Raw output dumps
+output
+output.txt
