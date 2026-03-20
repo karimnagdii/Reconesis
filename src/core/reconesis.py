@@ -139,6 +139,34 @@ class ReconesisEngine:
                 })
         return gaps
 
+    def _update_scan_history(self, depth: int, classified: list):
+        """Append a scan history entry for this depth. Called after Orient phase."""
+        self.scan_history.append({
+            "depth": depth,
+            "hosts": [
+                {
+                    "ip": h["target"],
+                    "type": h.get("type", "Unknown"),
+                    "criticality": h.get("criticality", "UNKNOWN"),
+                    "ports": [p["port"] for p in h.get("ports", [])]
+                }
+                for h in classified
+            ]
+        })
+
+    def _execute_and_merge(self, command: str):
+        """Execute an nmap command and merge parsed results into _host_map."""
+        if not command:
+            self._log("Act phase received empty command — skipping.", "warning")
+            return
+        raw_xml, pkts = self.executor.execute(command)
+        self.metrics["total_packets"] += pkts
+        if not raw_xml:
+            self._log("Act phase scan produced no output.", "warning")
+            return
+        for host in self.parser.parse(raw_xml):
+            self._merge_host(host)
+
     def _log(self, msg: str, level: str = "info"):
         """Log and emit to dashboard simultaneously."""
         getattr(self.logger, level)(msg)

@@ -199,3 +199,49 @@ class TestComputeGaps:
     def test_empty_host_map_returns_empty(self):
         engine = self._make_engine()
         assert engine._compute_gaps() == []
+
+
+class TestHelperMethods:
+    def _make_engine(self):
+        with patch("src.core.reconesis.NmapExecutor"), \
+             patch("src.core.reconesis.GroqAgent"), \
+             patch("src.core.reconesis.TOONParser"), \
+             patch("src.core.reconesis.CriticalityAssessor"), \
+             patch("src.core.reconesis.ExploitLookup"):
+            return ReconesisEngine()
+
+    def test_update_scan_history_appends_entry(self):
+        engine = self._make_engine()
+        classified = [_make_host("10.0.0.1", ports=[_make_port(22)])]
+        engine._update_scan_history(depth=1, classified=classified)
+        assert len(engine.scan_history) == 1
+        entry = engine.scan_history[0]
+        assert entry["depth"] == 1
+        assert entry["hosts"][0]["ip"] == "10.0.0.1"
+        assert 22 in entry["hosts"][0]["ports"]
+
+    def test_update_scan_history_accumulates_across_depths(self):
+        engine = self._make_engine()
+        engine._update_scan_history(1, [_make_host("10.0.0.1")])
+        engine._update_scan_history(2, [_make_host("10.0.0.1"), _make_host("10.0.0.2")])
+        assert len(engine.scan_history) == 2
+        assert len(engine.scan_history[1]["hosts"]) == 2
+
+    def test_execute_and_merge_empty_command_does_not_call_executor(self):
+        engine = self._make_engine()
+        engine._execute_and_merge("")
+        engine.executor.execute.assert_not_called()
+
+    def test_execute_and_merge_merges_parsed_hosts(self):
+        engine = self._make_engine()
+        engine.executor.execute.return_value = ("<xml>", 10)
+        engine.parser.parse.return_value = [_make_host("10.0.0.5")]
+        engine._execute_and_merge("nmap -sS 10.0.0.0/24")
+        assert "10.0.0.5" in engine._host_map
+        assert engine.metrics["total_packets"] == 10
+
+    def test_execute_and_merge_no_xml_output_does_not_crash(self):
+        engine = self._make_engine()
+        engine.executor.execute.return_value = ("", 0)
+        engine._execute_and_merge("nmap -sS 10.0.0.0/24")
+        assert engine._host_map == {}
