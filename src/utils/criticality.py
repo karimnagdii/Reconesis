@@ -360,7 +360,7 @@ class CriticalityAssessor:
             "ip": host_toon["target"],
             "ports": ports,
             "os": os_out,
-            "hostname": None,
+            "hostname": None,  # TOON does not carry hostname (Nmap runs with -n); reserved for future use
             "static": {
                 "top_type": top_type,
                 "top_score": top_score,
