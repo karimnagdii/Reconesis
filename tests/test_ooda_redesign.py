@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 from src.core.reconesis import ReconesisEngine
+from src.core.agent import GroqAgent
 
 
 def _make_port(port=80, service="http", version=None, product=None, scripts=None, exploits=None):
@@ -245,3 +246,48 @@ class TestHelperMethods:
         engine.executor.execute.return_value = ("", 0)
         engine._execute_and_merge("nmap -sS 10.0.0.0/24")
         assert engine._host_map == {}
+
+
+class TestGroqAgentDecide:
+    def _make_agent(self, groq_response: str):
+        with patch("src.core.agent.Config") as mock_cfg:
+            mock_cfg.GROQ_API_KEY = "test-key"
+            mock_cfg.GROQ_MODEL = "test-model"
+            mock_cfg.GROQ_API_URL = "http://test"
+            agent = GroqAgent()
+        agent._query_groq = MagicMock(return_value=(groq_response, "stop"))
+        return agent
+
+    def test_valid_json_response_returned(self):
+        agent = self._make_agent('{"command": "nmap -sV 10.0.0.1", "rationale": "fill gaps", "continue": true, "new_targets": []}')
+        result = agent.decide(hosts=[], gap_report=[], scan_history=[])
+        assert result["command"] == "nmap -sV 10.0.0.1"
+        assert result["continue"] is True
+        assert result["new_targets"] == []
+
+    def test_missing_command_key_returns_empty(self):
+        agent = self._make_agent('{"rationale": "done", "continue": false}')
+        result = agent.decide(hosts=[], gap_report=[], scan_history=[])
+        assert result == {}
+
+    def test_malformed_json_returns_empty(self):
+        agent = self._make_agent("this is not json at all")
+        result = agent.decide(hosts=[], gap_report=[], scan_history=[])
+        assert result == {}
+
+    def test_code_fenced_json_is_stripped_and_parsed(self):
+        fenced = '```json\n{"command": "nmap -O 10.0.0.1", "rationale": "os", "continue": true, "new_targets": []}\n```'
+        agent = self._make_agent(fenced)
+        result = agent.decide(hosts=[], gap_report=[], scan_history=[])
+        assert result["command"] == "nmap -O 10.0.0.1"
+
+    def test_defaults_applied_when_keys_missing(self):
+        agent = self._make_agent('{"command": "nmap -sS 10.0.0.1"}')
+        result = agent.decide(hosts=[], gap_report=[], scan_history=[])
+        assert result["continue"] is True
+        assert result["new_targets"] == []
+
+    def test_continue_false_preserved(self):
+        agent = self._make_agent('{"command": "nmap -sS 10.0.0.1", "continue": false, "new_targets": []}')
+        result = agent.decide(hosts=[], gap_report=[], scan_history=[])
+        assert result["continue"] is False

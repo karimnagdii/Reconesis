@@ -15,9 +15,27 @@ _DIALECT_RING = (
     " <port>[u][*] <svc> <prod>/<ver> [<yr-id>:<cvss>:<src>]\n"
     "T: D=Database M=Mail R=Router F=Firewall A=AD/LDAP J=Jump W=Web\n"
     "   S=AppServer I=IoT N=NAS X=WinFS Z=DNS G=Generic\n"
-    "C: C=CRITICAL H=HIGH M=MEDIUM L=LOW\n"
+    "C: C=CRITICAL H=HIGH M=MEDIUM L=LOW | ?=unk  !=noscript\n"
     "*=auth required  u=udp (default tcp)  src: n=nvd v=vulners c=circl\n"
     "M: line values are Type aliases only (never Criticality).\n\n"
+)
+
+
+DECIDE_SYSTEM_PROMPT = (
+    _DIALECT_RING
+    + "?=unk (field unknown) !=noscript (NSE output missing)\n\n"
+    "You are an autonomous network recon agent. You are given:\n"
+    "1. All discovered hosts in TOON with ? and ! gap markers.\n"
+    "2. Scan history (last 2 depths).\n\n"
+    "Generate ONE nmap command that fills the most gaps.\n\n"
+    "Reply ONLY with valid JSON — no prose, no code fences:\n"
+    '{\n  "command": "<nmap string>",\n'
+    '  "rationale": "<one sentence>",\n'
+    '  "continue": <true|false>,\n'
+    '  "new_targets": ["<ip or cidr>", ...]\n}\n\n'
+    "Rules:\n"
+    '"continue": false only when no further scanning will yield new info.\n'
+    '"new_targets": [] if no new scope hints found.'
 )
 
 
@@ -535,3 +553,30 @@ class GroqAgent:
         )
 
         return system_prompt, user_prompt
+
+    def decide(self, hosts: list, gap_report: list, scan_history: list) -> dict:
+        """Ask the LLM what to scan next given all accumulated hosts and the gap report.
+        Returns a decision dict or {} on parse failure (caller uses fallback)."""
+        gap_map = {g["ip"]: g["gaps"] for g in gap_report}
+        toon_block = ToonDialect.render_with_gaps(hosts, gap_map)
+        history_block = ToonDialect.compress_history(scan_history)
+        user_content = f"{toon_block}\n\n{history_block}"
+        raw, _ = self._query_groq(
+            system_prompt=DECIDE_SYSTEM_PROMPT,
+            user_prompt=user_content,
+            strip_backticks=False
+        )
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```[a-z]*\n?", "", raw)
+            raw = re.sub(r"\n?```$", "", raw)
+        try:
+            decision = json.loads(raw)
+            if "command" not in decision:
+                raise ValueError("Missing 'command' key")
+            decision.setdefault("new_targets", [])
+            decision.setdefault("continue", True)
+            return decision
+        except (json.JSONDecodeError, ValueError) as e:
+            self.logger.warning(f"decide() JSON parse failed: {e}. Falling back.")
+            return {}
