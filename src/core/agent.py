@@ -176,6 +176,32 @@ class GroqAgent:
         "- Return ONLY a valid JSON array. No prose, no markdown, no code fences."
     )
 
+    _REPORT_SECTION1_SYSTEM = (
+        "You are a Senior Cybersecurity Analyst reviewing automated network reconnaissance results.\n"
+        "Write the FIRST HALF of a professional report in Markdown. Use formal technical English. No emoji.\n\n"
+        "Write ONLY these two sections — nothing else:\n\n"
+        "# Executive Summary\n"
+        "Brief overview of the scan scope, methodology, and key findings (3-5 sentences).\n\n"
+        "# Critical Assets Identified\n"
+        "A Markdown table of all CRITICAL and HIGH assets with columns: "
+        "IP Address | Asset Type | Open Ports | Risk Level\n\n"
+        "Stop after the table. Do NOT write Risk Assessment, Remediation, or Conclusion."
+    )
+
+    _REPORT_SECTION2_SYSTEM = (
+        "You are a Senior Cybersecurity Analyst reviewing automated network reconnaissance results.\n"
+        "Write the SECOND HALF of a professional report in Markdown. Use formal technical English. No emoji.\n\n"
+        "Write ONLY these two sections — nothing else:\n\n"
+        "# Risk Assessment\n"
+        "Per-asset risk analysis for each CRITICAL and HIGH host. "
+        "If 'exploits' data is present for any port, include a CVE table with columns: "
+        "CVE ID | CVSS Score | Affected Service | Source. "
+        "Highlight CVEs with CVSS >= 7.0 as HIGH or CRITICAL severity.\n\n"
+        "# Recommended Remediation Actions\n"
+        "Prioritized, actionable steps to mitigate identified risks. Reference specific CVE IDs where applicable.\n\n"
+        "Do NOT repeat the executive summary or asset inventory table."
+    )
+
     def __init__(self):
         self.logger = logging.getLogger("GroqAgent")
         self.api_url = Config.GROQ_API_URL
@@ -318,38 +344,56 @@ class GroqAgent:
 
     def analyze_results(self, toon_data: list) -> str:
         """
-        Analyzes the final TOON data to produce a summary report.
-        Uses a longer timeout and explicit token cap for multi-page reports.
-        If the model hits the token limit, makes one continuation call to complete the report.
+        Generates the final report in two targeted API calls.
+        Call 1: Executive Summary + Critical Assets table.
+        Call 2: Risk Assessment + Remediation.
+        Falls back to the original single-call approach if either call fails.
         """
-        system_prompt, user_prompt = self._build_analysis_prompt(toon_data)
-        report, finish_reason = self._query_groq(
-            system_prompt, user_prompt, timeout=120, max_tokens=4096
+        slim_data = self._slim_toon(toon_data)
+        user_prompt = (
+            "Below is the complete scan data in TOON (Target-Oriented Object Notation) format. "
+            "Analyze every host, paying special attention to assets classified as Critical or High.\n\n"
+            f"SCAN DATA:\n{json.dumps(slim_data, indent=2)}"
         )
 
-        if finish_reason == "length" and report:
-            self.logger.warning(
-                "Report was truncated (finish_reason=length). Requesting continuation..."
+        try:
+            section1, reason1 = self._query_groq(
+                self._REPORT_SECTION1_SYSTEM, user_prompt, timeout=120, max_tokens=4096
             )
-            continuation_system = (
-                "You are a Senior Cybersecurity Analyst. "
-                "The report below was cut off due to length. "
-                "Continue writing from exactly where it stopped. "
-                "Do not repeat any content that has already been written. "
-                "Complete all remaining sections: "
-                "# Recommended Remediation Actions and # Conclusion."
-            )
-            continuation_user = (
-                f"The report so far:\n\n{report}\n\n"
-                "Continue from where the report was cut off."
-            )
-            continuation, _ = self._query_groq(
-                continuation_system, continuation_user, timeout=120, max_tokens=2048
-            )
-            if continuation:
-                report = report + "\n" + continuation
+            if not section1 or reason1 == "error":
+                raise ValueError("Section 1 call failed")
 
-        return report
+            section2, reason2 = self._query_groq(
+                self._REPORT_SECTION2_SYSTEM, user_prompt, timeout=120, max_tokens=4096
+            )
+            if not section2 or reason2 == "error":
+                raise ValueError("Section 2 call failed")
+
+            return section1 + "\n\n---\n\n" + section2
+
+        except Exception as e:
+            self.logger.warning(f"Two-section report failed ({e}), falling back to single-call")
+            system_prompt, fallback_user = self._build_analysis_prompt(toon_data)
+            report, finish_reason = self._query_groq(
+                system_prompt, fallback_user, timeout=120, max_tokens=4096
+            )
+
+            if finish_reason == "length" and report:
+                self.logger.warning("Fallback report truncated — requesting continuation")
+                continuation_system = (
+                    "You are a Senior Cybersecurity Analyst. "
+                    "The report below was cut off. Continue from exactly where it stopped. "
+                    "Do not repeat content already written. "
+                    "Complete remaining sections: # Recommended Remediation Actions and # Conclusion."
+                )
+                continuation_user = f"The report so far:\n\n{report}\n\nContinue from where the report was cut off."
+                continuation, _ = self._query_groq(
+                    continuation_system, continuation_user, timeout=120, max_tokens=2048
+                )
+                if continuation:
+                    report = report + "\n" + continuation
+
+            return report
 
     def _query_groq(self, system_prompt: str, user_prompt: str,
                     timeout: int = 30, max_tokens: int = None,
