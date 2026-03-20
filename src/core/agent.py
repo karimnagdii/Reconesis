@@ -301,7 +301,8 @@ class GroqAgent:
         return report
 
     def _query_groq(self, system_prompt: str, user_prompt: str,
-                    timeout: int = 30, max_tokens: int = None) -> tuple:
+                    timeout: int = 30, max_tokens: int = None,
+                    temperature: float = None) -> tuple:
         """
         Sends a request to the Groq API using proper system/user message roles
         for stronger instruction-following.
@@ -321,6 +322,8 @@ class GroqAgent:
         }
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
+        if temperature is not None:
+            payload["temperature"] = temperature
         try:
             response = requests.post(self.api_url, headers=headers, json=payload, timeout=timeout)
             response.raise_for_status()
