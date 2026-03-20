@@ -139,3 +139,63 @@ class TestMergeHost:
     def test_host_map_initialized_empty_before_start_scan(self):
         engine = self._make_engine()
         assert engine._all_hosts == []
+
+
+class TestComputeGaps:
+    def _make_engine(self):
+        with patch("src.core.reconesis.NmapExecutor"), \
+             patch("src.core.reconesis.GroqAgent"), \
+             patch("src.core.reconesis.TOONParser"), \
+             patch("src.core.reconesis.CriticalityAssessor"), \
+             patch("src.core.reconesis.ExploitLookup"):
+            return ReconesisEngine()
+
+    def test_no_gaps_when_host_fully_known(self):
+        engine = self._make_engine()
+        host = _make_host("10.0.0.1", os_accuracy=90, ports=[
+            _make_port(80, version="Apache 2.4", scripts=[{"id": "http-title", "output": "..."}])
+        ])
+        engine._merge_host(host)
+        assert engine._compute_gaps() == []
+
+    def test_os_unknown_gap_reported(self):
+        engine = self._make_engine()
+        engine._merge_host(_make_host("10.0.0.1", os_accuracy=0))
+        gaps = engine._compute_gaps()
+        assert len(gaps) == 1
+        assert "os_unknown" in gaps[0]["gaps"]
+
+    def test_no_version_gap_reported(self):
+        engine = self._make_engine()
+        engine._merge_host(_make_host("10.0.0.1", os_accuracy=90, ports=[_make_port(22, version="")]))
+        gaps = engine._compute_gaps()
+        assert any("no_version:22" in g for g in gaps[0]["gaps"])
+
+    def test_interesting_port_without_scripts_reported(self):
+        engine = self._make_engine()
+        # Port 3306 (MySQL) is in INTERESTING_PORTS
+        engine._merge_host(_make_host("10.0.0.1", os_accuracy=90, ports=[
+            _make_port(3306, version="MySQL 8.0", scripts=[])
+        ]))
+        gaps = engine._compute_gaps()
+        assert any("no_scripts:3306" in g for g in gaps[0]["gaps"])
+
+    def test_non_interesting_port_without_scripts_not_reported(self):
+        engine = self._make_engine()
+        # Port 9999 is NOT in INTERESTING_PORTS
+        engine._merge_host(_make_host("10.0.0.1", os_accuracy=90, ports=[
+            _make_port(9999, version="custom", scripts=[])
+        ]))
+        assert engine._compute_gaps() == []
+
+    def test_host_without_os_key_does_not_crash(self):
+        engine = self._make_engine()
+        host = {"target": "10.0.0.1", "status": "up", "ports": []}
+        engine._merge_host(host)
+        # Should not raise, should report os_unknown
+        gaps = engine._compute_gaps()
+        assert any("os_unknown" in g["gaps"] for g in gaps)
+
+    def test_empty_host_map_returns_empty(self):
+        engine = self._make_engine()
+        assert engine._compute_gaps() == []

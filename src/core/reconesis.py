@@ -10,6 +10,9 @@ from src.utils.exploit_lookup import ExploitLookup
 from src.utils.config import Config
 
 
+INTERESTING_PORTS = {21, 22, 23, 25, 80, 443, 445, 1433, 3306, 3389, 5432, 6379}
+
+
 class ReconesisEngine:
     def __init__(self, event_callback=None):
         """
@@ -113,6 +116,28 @@ class ReconesisEngine:
             existing["os"] = new_os
             changed = True
         return changed
+
+    def _compute_gaps(self) -> list:
+        """Returns a list of gap dicts — one per host that has unknowns.
+        Empty list means nothing left to learn; the loop should terminate."""
+        gaps = []
+        for host in self._host_map.values():
+            host_gaps = []
+            if host.get("os", {}).get("accuracy", 0) < 80:
+                host_gaps.append("os_unknown")
+            for p in host.get("ports", []):
+                if not p.get("version"):
+                    host_gaps.append(f"no_version:{p['port']}/{p['service']}")
+                if not p.get("scripts") and p["port"] in INTERESTING_PORTS:
+                    host_gaps.append(f"no_scripts:{p['port']}/{p['service']}")
+            if host_gaps:
+                gaps.append({
+                    "ip": host["target"],
+                    "type": host.get("type", "Unknown"),
+                    "criticality": host.get("criticality", "UNKNOWN"),
+                    "gaps": host_gaps
+                })
+        return gaps
 
     def _log(self, msg: str, level: str = "info"):
         """Log and emit to dashboard simultaneously."""
