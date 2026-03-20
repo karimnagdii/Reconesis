@@ -265,6 +265,58 @@ class GroqAgent:
         result, _ = self._query_groq(system_prompt, user_prompt)
         return result
 
+    # ── Class-level attribute ────────────────────────────────────────────
+    _CLASSIFY_SYSTEM_PROMPT = (
+        "You are a network asset classifier for a penetration testing tool.\n"
+        "You will receive a JSON array of hosts. Each host includes open ports,\n"
+        "service data, OS fingerprints, NSE script output, and a static scoring\n"
+        "breakdown.\n\n"
+        "Classify each host with:\n"
+        "- type: one of [Database Server, Mail Server, Firewall, Router,\n"
+        "  Active Directory / LDAP, Jump Host, Web Server, Application Server,\n"
+        "  IoT Camera, NAS Appliance, Windows File Server, DNS Server, Generic Host]\n"
+        "- criticality: CRITICAL | HIGH | MEDIUM | LOW\n"
+        "- reasoning: one sentence explaining the key signal that decided it\n\n"
+        "Classification rules:\n"
+        "- Trust service data, NSE script output, and product strings over port numbers alone\n"
+        "- A device with port 80 is NOT automatically a Web Server -- check product and script output\n"
+        "- CRITICAL = directly exploitable core infrastructure (databases, AD, firewalls,\n"
+        "  routers, mail servers, DNS, IoT cameras with default creds)\n"
+        "- HIGH = significant attack surface but not core infrastructure\n"
+        "  (file servers, jump hosts, application servers, workstations with SMB)\n"
+        "- MEDIUM = limited exposure, non-critical services\n"
+        "- LOW = printers, UPS/PDU, VoIP phones, access controllers, generic noise\n"
+        "- When the static scorer fires on a single common port (80, 443, 445) with no\n"
+        "  corroborating product string or NSE evidence, treat it with skepticism\n"
+        "- Return ONLY a valid JSON array. No prose, no markdown, no code fences."
+    )
+
+    def classify_hosts(self, evidence_bundles: list) -> list:
+        """
+        Classify all hosts in one batched LLM call.
+        Returns list of {ip, type, criticality, reasoning} dicts.
+        Returns [] on any failure — caller falls back to static labels.
+        """
+        if not evidence_bundles:
+            return []
+
+        user_prompt = json.dumps(evidence_bundles, separators=(',', ':'))
+        try:
+            result, finish_reason = self._query_groq(
+                self._CLASSIFY_SYSTEM_PROMPT,
+                user_prompt,
+                timeout=120,
+                max_tokens=2048,
+                temperature=0,
+            )
+            if not result or finish_reason == "error":
+                self.logger.warning("classify_hosts: empty or error response from Groq")
+                return []
+            return json.loads(result)
+        except Exception as e:
+            self.logger.warning(f"classify_hosts failed: {e}")
+            return []
+
     def analyze_results(self, toon_data: list) -> str:
         """
         Analyzes the final TOON data to produce a summary report.
