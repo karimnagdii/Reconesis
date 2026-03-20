@@ -379,3 +379,83 @@ class TestCompressHistory:
         lines = result.splitlines()
         d_lines = [l for l in lines if l.startswith("d")]
         assert len(d_lines) == 2
+
+
+# ── render_with_gaps ────────────────────────────────────────────────────────
+
+def _gapped_host(ip="10.0.0.1", type_="Database Server", crit="CRITICAL",
+                 os_name="Linux", os_acc=85, ports=None):
+    return {
+        "target": ip, "type": type_, "criticality": crit,
+        "os": {"name": os_name, "accuracy": os_acc},
+        "ports": ports or [],
+    }
+
+
+def _gport(port=80, service="http", product="", version="",
+           auth=False, protocol="tcp", scripts=None):
+    return {
+        "port": port, "protocol": protocol, "service": service,
+        "product": product, "version": version,
+        "auth_required": auth, "scripts": scripts or [], "exploits": [],
+    }
+
+
+class TestRenderWithGaps:
+
+    def test_os_unknown_shows_question_mark(self):
+        host = _gapped_host(os_name="unknown", os_acc=0)
+        gap_map = {"10.0.0.1": ["os_unknown"]}
+        result = ToonDialect.render_with_gaps([host], gap_map)
+        assert result.splitlines()[0].endswith("?")
+
+    def test_known_os_shown_normally(self):
+        host = _gapped_host(os_name="Linux-4.15", os_acc=90)
+        gap_map = {}
+        result = ToonDialect.render_with_gaps([host], gap_map)
+        assert "Linux-4.15" in result.splitlines()[0]
+
+    def test_no_version_port_shows_question_mark(self):
+        host = _gapped_host(ports=[_gport(22, "ssh")])
+        gap_map = {"10.0.0.1": ["no_version:22/ssh"]}
+        result = ToonDialect.render_with_gaps([host], gap_map)
+        port_line = [l for l in result.splitlines() if "22" in l][0]
+        assert "?" in port_line
+
+    def test_known_version_port_shown_normally(self):
+        host = _gapped_host(ports=[_gport(22, "ssh", product="OpenSSH", version="8.0")])
+        gap_map = {}
+        result = ToonDialect.render_with_gaps([host], gap_map)
+        assert "OpenSSH/8.0" in result
+
+    def test_no_scripts_port_shows_exclamation(self):
+        host = _gapped_host(ports=[_gport(3306, "mysql", product="MySQL", version="8.0")])
+        gap_map = {"10.0.0.1": ["no_scripts:3306/mysql"]}
+        result = ToonDialect.render_with_gaps([host], gap_map)
+        port_line = [l for l in result.splitlines() if "3306" in l][0]
+        assert port_line.endswith("!")
+
+    def test_port_with_no_gaps_has_no_markers(self):
+        host = _gapped_host(ports=[_gport(80, "http", product="Apache", version="2.4")])
+        gap_map = {}
+        result = ToonDialect.render_with_gaps([host], gap_map)
+        port_line = [l for l in result.splitlines() if "80" in l][0]
+        assert "?" not in port_line
+        assert "!" not in port_line
+
+    def test_all_hosts_rendered_not_just_critical(self):
+        hosts = [
+            _gapped_host("10.0.0.1", crit="CRITICAL"),
+            _gapped_host("10.0.0.2", crit="LOW", type_="Generic Host"),
+        ]
+        result = ToonDialect.render_with_gaps(hosts, {})
+        assert "10.0.0.1" in result
+        assert "10.0.0.2" in result
+
+    def test_empty_hosts_returns_empty_string(self):
+        assert ToonDialect.render_with_gaps([], {}) == ""
+
+    def test_multiple_hosts_blank_line_separator(self):
+        hosts = [_gapped_host("10.0.0.1"), _gapped_host("10.0.0.2")]
+        result = ToonDialect.render_with_gaps(hosts, {})
+        assert "\n\n" in result

@@ -203,3 +203,64 @@ class ToonDialect:
             depth_lines.append(f"d{n}: " + " | ".join(host_parts))
 
         return header + "\n".join(depth_lines)
+
+    @staticmethod
+    def render_with_gaps(hosts: list, gap_map: dict) -> str:
+        """Render all hosts in TOON with ? (unknown) and ! (no scripts) gap markers.
+        gap_map: {ip: [gap_string, ...]} from _compute_gaps() output."""
+        if not hosts:
+            return ""
+        blocks = []
+        for host in hosts:
+            ip = host["target"]
+            gaps = gap_map.get(ip, [])
+            type_alias = _TYPE_ALIAS.get(host.get("type", "Generic Host"), "G")
+            crit_alias = _CRIT_ALIAS.get(host.get("criticality", "LOW"), "L")
+
+            os_name = host.get("os", {}).get("name", "")
+            if "os_unknown" in gaps:
+                os_part = " ?"
+            elif os_name and os_name.lower() not in ("unknown", "none", ""):
+                os_part = " " + os_name.replace(" ", "-")
+            else:
+                os_part = ""
+
+            lines = [f"{ip} {type_alias} {crit_alias}{os_part}"]
+
+            for p in host.get("ports", []):
+                port_num = p["port"]
+                svc = p.get("service", "")
+                proto = p.get("protocol", "tcp")
+                auth = p.get("auth_required", False)
+
+                port_field = f"u:{port_num}" if proto == "udp" else str(port_num)
+                if auth:
+                    port_field += "*"
+
+                svc_field = f" {svc}" if svc else ""
+
+                no_version_key = f"no_version:{port_num}/{svc}"
+                no_scripts_key = f"no_scripts:{port_num}/{svc}"
+
+                if no_version_key in gaps:
+                    prod_field = " ?"
+                else:
+                    product = p.get("product", "")
+                    version = p.get("version", "")
+                    if product or version:
+                        prod_name = product.replace(" ", "-") if product else ""
+                        if prod_name and version:
+                            prod_field = f" {prod_name}/{version}"
+                        elif prod_name:
+                            prod_field = f" {prod_name}"
+                        else:
+                            prod_field = f" /{version}"
+                    else:
+                        prod_field = ""
+
+                scripts_flag = "!" if no_scripts_key in gaps else ""
+                lines.append(f" {port_field}{svc_field}{prod_field}{scripts_flag}")
+
+            blocks.append("\n".join(lines))
+
+        return "\n\n".join(blocks)
