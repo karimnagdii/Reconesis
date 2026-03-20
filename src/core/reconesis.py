@@ -23,7 +23,7 @@ class ReconesisEngine:
         self.assessor = CriticalityAssessor()
         self.exploit_lookup = ExploitLookup()
         self.scan_history = []
-        self._all_hosts = []      # Shared state across extracted phase methods
+        self._host_map = {}       # Accumulates host data across all phases and depths
 
         # Dashboard event stream hook
         self._emit = event_callback if event_callback else lambda t, d: None
@@ -79,6 +79,40 @@ class ReconesisEngine:
         if new_port.get("exploits") and not existing_port.get("exploits"):
             return True
         return False
+
+    @property
+    def _all_hosts(self) -> list:
+        return list(self._host_map.values())
+
+    @_all_hosts.setter
+    def _all_hosts(self, hosts: list):
+        filtered = [h for h in hosts if "target" in h]
+        if len(filtered) < len(hosts):
+            self.logger.warning(
+                f"_all_hosts setter: dropped {len(hosts) - len(filtered)} host(s) missing 'target' key"
+            )
+        self._host_map = {h["target"]: h for h in filtered}
+
+    def _merge_host(self, new_host: dict) -> bool:
+        """Merge new_host into self._host_map. Returns True if anything changed."""
+        ip = new_host["target"]
+        if ip not in self._host_map:
+            self._host_map[ip] = new_host
+            return True
+        existing = self._host_map[ip]
+        changed = False
+        port_map = {p["port"]: p for p in existing.get("ports", [])}
+        for p in new_host.get("ports", []):
+            if p["port"] not in port_map or ReconesisEngine._is_richer(p, port_map[p["port"]]):
+                port_map[p["port"]] = p
+                changed = True
+        existing["ports"] = list(port_map.values())
+        new_os = new_host.get("os", {})
+        existing_os = existing.get("os", {})
+        if new_os.get("accuracy", 0) > existing_os.get("accuracy", 0):
+            existing["os"] = new_os
+            changed = True
+        return changed
 
     def _log(self, msg: str, level: str = "info"):
         """Log and emit to dashboard simultaneously."""
