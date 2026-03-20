@@ -176,4 +176,30 @@ class ToonDialect:
 
     @staticmethod
     def compress_history(scan_history: list) -> str:
-        raise NotImplementedError
+        """
+        Compress scan history to dialect. Takes FULL list — caps to last 2 internally.
+        Prepends inline decoder header for hunter/scout prompts that lack _DIALECT_RING.
+        """
+        header = (
+            "History (T/C aliases: D=Database M=Mail R=Router F=Firewall "
+            "A=AD/LDAP J=Jump W=Web S=AppServer I=IoT N=NAS X=WinFS Z=DNS G=Generic "
+            "| C=CRITICAL H=HIGH M=MEDIUM L=LOW):\n"
+        )
+
+        recent = scan_history[-2:] if len(scan_history) > 2 else scan_history
+        if not recent:
+            return header.rstrip()
+
+        depth_lines = []
+        for entry in recent:
+            n     = entry["depth"]
+            hosts = entry.get("hosts", [])
+            host_parts = []
+            for h in hosts:
+                t_alias = _TYPE_ALIAS.get(h.get("type", "Generic Host"), "G")
+                c_alias = _CRIT_ALIAS.get(h.get("criticality", "LOW"), "L")
+                ports   = ",".join(str(p) for p in h.get("ports", []))
+                host_parts.append(f"{h['ip']}/{t_alias}/{c_alias}/{ports}")
+            depth_lines.append(f"d{n}: " + " | ".join(host_parts))
+
+        return header + "\n".join(depth_lines)

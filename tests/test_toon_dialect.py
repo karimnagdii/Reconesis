@@ -276,3 +276,106 @@ class TestSerializeClassify:
         port_line = [l for l in result.splitlines() if "5432" in l and "M:" not in l][0]
         assert port_line.startswith(" ")
         assert not port_line.startswith("  ")
+
+
+# ── compress_history ────────────────────────────────────────────────────────
+
+def _history_entry(depth, hosts):
+    """Build a scan_history entry."""
+    return {"depth": depth, "hosts": hosts}
+
+
+def _hhost(ip="10.0.0.1", type_="Database Server",
+           crit="CRITICAL", ports=None):
+    return {"ip": ip, "type": type_, "criticality": crit,
+            "ports": ports or [5432, 22]}
+
+
+class TestCompressHistory:
+
+    def test_empty_list_returns_header_only(self):
+        result = ToonDialect.compress_history([])
+        assert "History" in result
+        assert "aliases" in result
+
+    def test_single_depth_format(self):
+        history = [_history_entry(1, [_hhost()])]
+        result = ToonDialect.compress_history(history)
+        assert "d1: 10.0.0.1/D/C/5432,22" in result
+
+    def test_two_depths(self):
+        history = [
+            _history_entry(1, [_hhost()]),
+            _history_entry(2, [_hhost(ports=[5432, 22, 3306])]),
+        ]
+        result = ToonDialect.compress_history(history)
+        assert "d1:" in result
+        assert "d2:" in result
+
+    def test_caps_to_last_two_depths(self):
+        history = [
+            _history_entry(1, [_hhost()]),
+            _history_entry(2, [_hhost()]),
+            _history_entry(3, [_hhost(ports=[443])]),
+        ]
+        result = ToonDialect.compress_history(history)
+        assert "d1:" not in result
+        assert "d2:" in result
+        assert "d3:" in result
+
+    def test_depth_n_uses_entry_depth_not_index(self):
+        # Even after slicing, the depth integer in the output = entry["depth"]
+        history = [
+            _history_entry(2, [_hhost()]),
+            _history_entry(3, [_hhost()]),
+        ]
+        result = ToonDialect.compress_history(history)
+        assert "d2:" in result
+        assert "d3:" in result
+        assert "d1:" not in result
+
+    def test_multiple_hosts_pipe_separated(self):
+        history = [_history_entry(1, [
+            _hhost("10.0.0.1"),
+            _hhost("10.0.0.2", type_="Web Server", crit="HIGH"),
+        ])]
+        result = ToonDialect.compress_history(history)
+        assert "10.0.0.1/D/C" in result
+        assert "10.0.0.2/W/H" in result
+        assert " | " in result
+
+    def test_ports_bare_csv_integers(self):
+        history = [_history_entry(1, [_hhost(ports=[80, 443, 8080])])]
+        result = ToonDialect.compress_history(history)
+        assert "80,443,8080" in result
+
+    def test_type_aliases_applied(self):
+        history = [_history_entry(1, [
+            _hhost(type_="Mail Server", crit="CRITICAL"),
+        ])]
+        result = ToonDialect.compress_history(history)
+        assert "/M/C/" in result
+
+    def test_criticality_aliases_applied(self):
+        history = [_history_entry(1, [
+            _hhost(crit="HIGH"),
+        ])]
+        result = ToonDialect.compress_history(history)
+        assert "/D/H/" in result
+
+    def test_decoder_header_present(self):
+        history = [_history_entry(1, [_hhost()])]
+        result = ToonDialect.compress_history(history)
+        # Header should contain alias legend
+        assert "D=Database" in result
+        assert "C=CRITICAL" in result
+
+    def test_depth_lines_newline_separated(self):
+        history = [
+            _history_entry(1, [_hhost()]),
+            _history_entry(2, [_hhost()]),
+        ]
+        result = ToonDialect.compress_history(history)
+        lines = result.splitlines()
+        d_lines = [l for l in lines if l.startswith("d")]
+        assert len(d_lines) == 2
