@@ -1,6 +1,0 @@
-$TTL 86400
-@   IN  SOA ns1.corp.local. admin.corp.local. (2024010101 3600 1800 604800 86400)
-@   IN  NS  ns1.corp.local.
-ns1 IN  A   172.20.0.33
-dc1 IN  A   172.20.0.23
-web IN  A   172.20.0.30

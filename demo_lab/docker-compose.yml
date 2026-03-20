@@ -1,490 +1,277 @@
 version: '3.8'
 
-services:
-
-  # ── TIER 1: DATABASES (172.20.0.10–.13) ────────────────────
-
-  db_postgres:
-    image: postgres:15-alpine
-    container_name: demo_db_postgres
-    environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: password123
-      POSTGRES_DB: corp_db
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.10
-
-  db_mysql:
-    image: mysql:8.0
-    container_name: demo_db_mysql
-    environment:
-      MYSQL_ROOT_PASSWORD: rootpass123
-      MYSQL_DATABASE: corp_app
-      MYSQL_USER: appuser
-      MYSQL_PASSWORD: apppass123
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.11
-
-  db_redis:
-    image: redis:7-alpine
-    container_name: demo_db_redis
-    command: redis-server --bind 0.0.0.0 --protected-mode no
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.12
-
-  db_mongo:
-    image: mongo:6.0
-    container_name: demo_db_mongo
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: admin
-      MONGO_INITDB_ROOT_PASSWORD: mongopass123
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.13
-
-  # ── TIER 2: NETWORK INFRASTRUCTURE (172.20.0.20–.23) ───────
-
-  router_core:
-    image: alpine:3.19
-    container_name: demo_router_core
-    command: >
-      sh -c "
-        apk add --no-cache socat net-snmp &&
-        printf 'rocommunity public\n' > /etc/snmp/snmpd.conf &&
-        snmpd -f -Lo -c /etc/snmp/snmpd.conf &
-        socat TCP-LISTEN:22,fork,reuseaddr SYSTEM:'printf \"SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.6\r\n\"' &
-        socat TCP-LISTEN:23,fork,reuseaddr SYSTEM:'printf \"Router Login: \r\n\"' &
-        socat TCP-LISTEN:179,fork,reuseaddr SYSTEM:'printf \"BGP Router Ready\r\n\"' &
-        tail -f /dev/null
-      "
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.20
-
-  firewall_edge:
-    image: alpine:3.19
-    container_name: demo_firewall_edge
-    command: >
-      sh -c "
-        apk add --no-cache socat &&
-        socat TCP-LISTEN:22,fork,reuseaddr SYSTEM:'printf \"SSH-2.0-OpenSSH_8.9p1 FortiOS\r\n\"' &
-        socat TCP-LISTEN:443,fork,reuseaddr SYSTEM:'printf \"HTTP/1.1 200 OK\r\nServer: FortiGate\r\nContent-Length: 0\r\n\r\n\"' &
-        socat TCP-LISTEN:8443,fork,reuseaddr SYSTEM:'printf \"HTTP/1.1 200 OK\r\nServer: FortiGate-Admin\r\nContent-Length: 0\r\n\r\n\"' &
-        tail -f /dev/null
-      "
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.21
-
-  jumpbox:
-    image: alpine:3.19
-    container_name: demo_jumpbox
-    command: >
-      sh -c "
-        apk add --no-cache socat openssh-server &&
-        ssh-keygen -A &&
-        echo 'root:jumppass123' | chpasswd &&
-        sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config &&
-        /usr/sbin/sshd &&
-        socat TCP-LISTEN:2222,fork,reuseaddr SYSTEM:'printf \"SSH-2.0-OpenSSH_8.9p1 Bastion-key-only\r\n\"' &
-        tail -f /dev/null
-      "
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.22
-
-  ldap_server:
-    image: osixia/openldap:1.5.0
-    container_name: demo_ldap_server
-    environment:
-      LDAP_ORGANISATION: "Corp"
-      LDAP_DOMAIN: "corp.local"
-      LDAP_ADMIN_PASSWORD: "adminpass"
-      LDAP_READONLY_USER: "false"
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.23
-
-  # ── TIER 3: SERVICES (172.20.0.30–.33) ─────────────────────
-
-  web_frontend:
-    image: nginx:alpine
-    container_name: demo_web_frontend
-    volumes:
-      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
-    entrypoint: >
-      sh -c "
-        apk add --no-cache openssl &&
-        mkdir -p /etc/nginx/ssl &&
-        openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/nginx/ssl/key.pem -out /etc/nginx/ssl/cert.pem -subj '/CN=corp.local/O=Corp/C=US' 2>/dev/null &&
-        exec nginx -g 'daemon off;'
-      "
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.30
-
-  app_server:
-    image: tomcat:9.0-jdk17-temurin
-    container_name: demo_app_server
-    entrypoint: >
-      sh -c "
-        apk add --no-cache socat &&
-        socat TCP-LISTEN:8443,fork,reuseaddr SYSTEM:'printf \"HTTP/1.1 200 OK\r\nServer: Apache Tomcat/9.0.65\r\nContent-Length: 0\r\n\r\n\"' &
-        exec /usr/local/tomcat/bin/catalina.sh run
-      "
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.31
-
-  mail_server:
-    image: alpine:3.19
-    container_name: demo_mail_server
-    command: >
-      sh -c "
-        apk add --no-cache socat python3 py3-pip &&
-        pip3 install --break-system-packages aiosmtpd &&
-        python3 -m aiosmtpd -n -l 0.0.0.0:25 &
-        socat TCP-LISTEN:110,fork,reuseaddr SYSTEM:'printf \"+OK Dovecot POP3 server ready\r\n\"' &
-        socat TCP-LISTEN:143,fork,reuseaddr SYSTEM:'printf \"* OK [CAPABILITY IMAP4rev1] Dovecot ready\r\n\"' &
-        socat TCP-LISTEN:465,fork,reuseaddr SYSTEM:'printf \"220 mail.corp.local ESMTP Postfix\r\n\"' &
-        socat TCP-LISTEN:587,fork,reuseaddr SYSTEM:'printf \"220 mail.corp.local ESMTP Submission\r\n\"' &
-        socat TCP-LISTEN:993,fork,reuseaddr SYSTEM:'printf \"* OK Dovecot IMAP ready\r\n\"' &
-        socat TCP-LISTEN:995,fork,reuseaddr SYSTEM:'printf \"+OK Dovecot POP3 ready\r\n\"' &
-        tail -f /dev/null
-      "
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.32
-
-  dns_server:
-    image: ubuntu/bind9:9.18-22.04_beta
-    container_name: demo_dns_server
-    volumes:
-      - ./bind9/named.conf:/etc/bind/named.conf:ro
-      - ./bind9/zones:/etc/bind/zones:ro
-    entrypoint: >
-      sh -c "
-        rndc-confgen -a -A hmac-sha256 -b 256 -c /etc/bind/rndc.key 2>/dev/null &&
-        chown bind:bind /etc/bind/rndc.key &&
-        chmod 640 /etc/bind/rndc.key &&
-        exec /usr/sbin/named -g -u bind -c /etc/bind/named.conf
-      "
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.33
-
-  # ── TIER 4: STORAGE (172.20.0.40–.41) ──────────────────────
-
-  nas:
-    image: alpine:3.19
-    container_name: demo_nas
-    command: >
-      sh -c "
-        apk add --no-cache samba socat &&
-        mkdir -p /srv/nas /var/lib/samba /var/log/samba &&
-        smbd -F --no-process-group &
-        socat TCP-LISTEN:548,fork,reuseaddr SYSTEM:'printf \"AFP/3.4 ready\r\n\"' &
-        socat TCP-LISTEN:873,fork,reuseaddr SYSTEM:'printf \"@RSYNCD: 31.0\r\n\"' &
-        socat TCP-LISTEN:2049,fork,reuseaddr SYSTEM:'printf \"NFS ready\r\n\"' &
-        socat TCP-LISTEN:5000,fork,reuseaddr SYSTEM:'printf \"HTTP/1.1 200 OK\r\nServer: Synology DSM\r\nContent-Length: 0\r\n\r\n\"' &
-        socat TCP-LISTEN:5001,fork,reuseaddr SYSTEM:'printf \"HTTP/1.1 200 OK\r\nServer: Synology DSM HTTPS\r\nContent-Length: 0\r\n\r\n\"' &
-        tail -f /dev/null
-      "
-    volumes:
-      - ./samba/nas-smb.conf:/etc/samba/smb.conf
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.40
-
-  winfs:
-    image: alpine:3.19
-    container_name: demo_winfs
-    command: >
-      sh -c "
-        apk add --no-cache samba socat &&
-        mkdir -p /srv/files /var/lib/samba /var/log/samba &&
-        smbd -F --no-process-group &
-        socat TCP-LISTEN:135,fork,reuseaddr SYSTEM:'printf \"MSRPC endpoint mapper\r\n\"' &
-        socat TCP-LISTEN:139,fork,reuseaddr SYSTEM:'printf \"NetBIOS session ready\r\n\"' &
-        tail -f /dev/null
-      "
-    volumes:
-      - ./samba/winfs-smb.conf:/etc/samba/smb.conf
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.41
-
-  # ── TIER 5: IoT CAMERAS (172.20.0.50–.51) ──────────────────
-
-  camera_hikvision:
-    image: alpine:3.19
-    container_name: demo_camera_hikvision
-    command: >
-      sh -c "
-        apk add --no-cache socat &&
-        socat TCP-LISTEN:554,fork,reuseaddr SYSTEM:'printf \"RTSP/1.0 200 OK\r\nServer: HikVision-IP-Camera/v5.4.5\r\nCSeq: 1\r\n\r\n\"' &
-        socat TCP-LISTEN:8000,fork,reuseaddr SYSTEM:'printf \"HTTP/1.1 200 OK\r\nServer: HikVision-IP-Camera/v5.4.5\r\nContent-Length: 0\r\n\r\n\"' &
-        socat TCP-LISTEN:8899,fork,reuseaddr SYSTEM:'printf \"HTTP/1.1 200 OK\r\nServer: HikVision-ONVIF\r\nContent-Length: 0\r\n\r\n\"' &
-        tail -f /dev/null
-      "
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.50
-
-  camera_dahua:
-    image: alpine:3.19
-    container_name: demo_camera_dahua
-    command: >
-      sh -c "
-        apk add --no-cache socat &&
-        socat TCP-LISTEN:554,fork,reuseaddr SYSTEM:'printf \"RTSP/1.0 200 OK\r\nServer: Dahua-IP-Camera/V2.800\r\nCSeq: 1\r\n\r\n\"' &
-        socat TCP-LISTEN:80,fork,reuseaddr SYSTEM:'printf \"HTTP/1.1 200 OK\r\nServer: Dahua IP Camera Web Server\r\nContent-Length: 0\r\n\r\n\"' &
-        socat TCP-LISTEN:37777,fork,reuseaddr SYSTEM:'printf \"Dahua Private Protocol Ready\r\n\"' &
-        tail -f /dev/null
-      "
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.51
-
-  # ── TIER 6: WORKSTATIONS (172.20.0.60–.65) ─────────────────
-
-  ws_1:
-    image: alpine:3.19
-    container_name: demo_ws_1
-    command: >
-      sh -c "
-        apk add --no-cache socat &&
-        socat TCP-LISTEN:445,fork,reuseaddr SYSTEM:'printf \"SMB signing: enabled\r\n\"' &
-        socat TCP-LISTEN:3389,fork,reuseaddr SYSTEM:'printf \"RDP ready\r\n\"' &
-        tail -f /dev/null
-      "
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.60
-
-  ws_2:
-    image: alpine:3.19
-    container_name: demo_ws_2
-    command: >
-      sh -c "
-        apk add --no-cache socat &&
-        socat TCP-LISTEN:445,fork,reuseaddr SYSTEM:'printf \"SMB signing: enabled\r\n\"' &
-        socat TCP-LISTEN:3389,fork,reuseaddr SYSTEM:'printf \"RDP ready\r\n\"' &
-        tail -f /dev/null
-      "
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.61
-
-  ws_3:
-    image: alpine:3.19
-    container_name: demo_ws_3
-    command: >
-      sh -c "
-        apk add --no-cache socat openssh-server &&
-        ssh-keygen -A &&
-        echo 'root:ws3pass' | chpasswd &&
-        sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config &&
-        /usr/sbin/sshd &&
-        socat TCP-LISTEN:445,fork,reuseaddr SYSTEM:'printf \"SMB signing: enabled\r\n\"' &
-        tail -f /dev/null
-      "
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.62
-
-  ws_4:
-    image: alpine:3.19
-    container_name: demo_ws_4
-    command: >
-      sh -c "
-        apk add --no-cache socat &&
-        socat TCP-LISTEN:445,fork,reuseaddr SYSTEM:'printf \"SMB signing: disabled\r\n\"' &
-        socat TCP-LISTEN:3389,fork,reuseaddr SYSTEM:'printf \"RDP ready\r\n\"' &
-        tail -f /dev/null
-      "
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.63
-
-  ws_dev_1:
-    image: alpine:3.19
-    container_name: demo_ws_dev_1
-    command: >
-      sh -c "
-        apk add --no-cache socat openssh-server &&
-        ssh-keygen -A &&
-        echo 'root:devpass' | chpasswd &&
-        sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config &&
-        /usr/sbin/sshd &&
-        socat TCP-LISTEN:3000,fork,reuseaddr SYSTEM:'printf \"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n\"' &
-        socat TCP-LISTEN:8000,fork,reuseaddr SYSTEM:'printf \"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n\"' &
-        tail -f /dev/null
-      "
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.64
-
-  ws_dev_2:
-    image: alpine:3.19
-    container_name: demo_ws_dev_2
-    command: >
-      sh -c "
-        apk add --no-cache socat openssh-server &&
-        ssh-keygen -A &&
-        echo 'root:devpass2' | chpasswd &&
-        sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config &&
-        /usr/sbin/sshd &&
-        socat TCP-LISTEN:5000,fork,reuseaddr SYSTEM:'printf \"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n\"' &
-        socat TCP-LISTEN:5001,fork,reuseaddr SYSTEM:'printf \"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n\"' &
-        tail -f /dev/null
-      "
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.65
-
-  # ── TIER 7: PRINTERS / COPIERS (172.20.0.70–.72) ───────────
-
-  printer_1:
-    image: alpine:3.19
-    container_name: demo_printer_1
-    command: >
-      sh -c "
-        apk add --no-cache socat &&
-        socat TCP-LISTEN:9100,fork,reuseaddr SYSTEM:'printf \"HP JetDirect\r\n\"' &
-        socat TCP-LISTEN:631,fork,reuseaddr SYSTEM:'printf \"HTTP/1.1 200 OK\r\nServer: CUPS/2.4.0\r\nContent-Length: 0\r\n\r\n\"' &
-        tail -f /dev/null
-      "
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.70
-
-  printer_2:
-    image: alpine:3.19
-    container_name: demo_printer_2
-    command: >
-      sh -c "
-        apk add --no-cache socat &&
-        socat TCP-LISTEN:9100,fork,reuseaddr SYSTEM:'printf \"HP JetDirect\r\n\"' &
-        socat TCP-LISTEN:631,fork,reuseaddr SYSTEM:'printf \"HTTP/1.1 200 OK\r\nServer: CUPS/2.4.0\r\nContent-Length: 0\r\n\r\n\"' &
-        tail -f /dev/null
-      "
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.71
-
-  copier:
-    image: alpine:3.19
-    container_name: demo_copier
-    command: >
-      sh -c "
-        apk add --no-cache socat &&
-        socat TCP-LISTEN:9100,fork,reuseaddr SYSTEM:'printf \"HP JetDirect\r\n\"' &
-        socat TCP-LISTEN:631,fork,reuseaddr SYSTEM:'printf \"HTTP/1.1 200 OK\r\nServer: CUPS/2.4.0\r\nContent-Length: 0\r\n\r\n\"' &
-        socat TCP-LISTEN:80,fork,reuseaddr SYSTEM:'printf \"HTTP/1.1 200 OK\r\nServer: Xerox WorkCentre\r\nContent-Length: 0\r\n\r\n\"' &
-        socat TCP-LISTEN:445,fork,reuseaddr SYSTEM:'printf \"SMB ready\r\n\"' &
-        tail -f /dev/null
-      "
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.72
-
-  # ── TIER 8: SPECIALTY NOISE (172.20.0.80–.85) ──────────────
-
-  voip_1:
-    image: alpine:3.19
-    container_name: demo_voip_1
-    command: >
-      sh -c "
-        apk add --no-cache socat &&
-        socat UDP-RECVFROM:5060,fork EXEC:'printf \"SIP/2.0 200 OK\r\nContent-Length: 0\r\n\r\n\"' &
-        tail -f /dev/null
-      "
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.80
-
-  voip_2:
-    image: alpine:3.19
-    container_name: demo_voip_2
-    command: >
-      sh -c "
-        apk add --no-cache socat &&
-        socat UDP-RECVFROM:5060,fork EXEC:'printf \"SIP/2.0 200 OK\r\nContent-Length: 0\r\n\r\n\"' &
-        tail -f /dev/null
-      "
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.81
-
-  switch:
-    image: alpine:3.19
-    container_name: demo_switch
-    command: >
-      sh -c "
-        apk add --no-cache socat net-snmp openssh-server &&
-        ssh-keygen -A &&
-        echo 'root:switchpass' | chpasswd &&
-        sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config &&
-        /usr/sbin/sshd &&
-        printf 'rocommunity public\n' > /etc/snmp/snmpd.conf &&
-        snmpd -f -Lo -c /etc/snmp/snmpd.conf &
-        socat TCP-LISTEN:80,fork,reuseaddr SYSTEM:'printf \"HTTP/1.1 200 OK\r\nServer: Cisco IOS HTTP Server\r\nContent-Length: 0\r\n\r\n\"' &
-        tail -f /dev/null
-      "
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.82
-
-  ups:
-    image: alpine:3.19
-    container_name: demo_ups
-    command: >
-      sh -c "
-        apk add --no-cache socat net-snmp &&
-        printf 'rocommunity public\n' > /etc/snmp/snmpd.conf &&
-        snmpd -f -Lo -c /etc/snmp/snmpd.conf &
-        socat TCP-LISTEN:80,fork,reuseaddr SYSTEM:'printf \"HTTP/1.1 200 OK\r\nServer: APC Web Management\r\nContent-Length: 0\r\n\r\n\"' &
-        tail -f /dev/null
-      "
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.83
-
-  videoconf:
-    image: alpine:3.19
-    container_name: demo_videoconf
-    command: >
-      sh -c "
-        apk add --no-cache socat &&
-        socat UDP-RECVFROM:5060,fork EXEC:'printf \"SIP/2.0 200 OK\r\nContent-Length: 0\r\n\r\n\"' &
-        socat TCP-LISTEN:80,fork,reuseaddr SYSTEM:'printf \"HTTP/1.1 200 OK\r\nServer: Cisco Webex Room\r\nContent-Length: 0\r\n\r\n\"' &
-        socat TCP-LISTEN:443,fork,reuseaddr SYSTEM:'printf \"HTTP/1.1 200 OK\r\nServer: Cisco Webex Room\r\nContent-Length: 0\r\n\r\n\"' &
-        tail -f /dev/null
-      "
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.84
-
-  accessctrl:
-    image: alpine:3.19
-    container_name: demo_accessctrl
-    command: >
-      sh -c "
-        apk add --no-cache socat &&
-        socat TCP-LISTEN:80,fork,reuseaddr SYSTEM:'printf \"HTTP/1.1 200 OK\r\nServer: HID Access Controller\r\nContent-Length: 0\r\n\r\n\"' &
-        tail -f /dev/null
-      "
-    networks:
-      recon_net:
-        ipv4_address: 172.20.0.85
-
 networks:
   recon_net:
     driver: bridge
     ipam:
       config:
         - subnet: 172.20.0.0/24
+
+services:
+
+  # ── CRITICAL tier (4) ──────────────────────────────────────
+  # LLM classification: CRITICAL = core infrastructure
+  # dc01, casedb, mail01, ipcam01 — static scorer and LLM agree
+
+  dc01:
+    image: osixia/openldap:1.5.0
+    container_name: dc01
+    environment:
+      LDAP_ORGANISATION: "Meridian Legal LLP"
+      LDAP_DOMAIN: "meridian-legal.local"
+      LDAP_ADMIN_PASSWORD: "Admin1234"
+    volumes:
+      - ./dc01/entrypoint.sh:/entrypoint-wrapper.sh:ro
+    entrypoint: ["/bin/bash", "/entrypoint-wrapper.sh"]
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.10
+
+  casedb:
+    image: postgres:15-alpine
+    container_name: casedb
+    environment:
+      POSTGRES_USER: caseadmin
+      POSTGRES_PASSWORD: casepass123
+      POSTGRES_DB: case_management
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.11
+
+  mail01:
+    image: alpine:3.19
+    container_name: mail01
+    command: >
+      sh -c "apk add --no-cache socat &&
+             socat TCP-LISTEN:25,fork,reuseaddr
+               EXEC:'printf \"220 mail.meridian-legal.local ESMTP Postfix\r\n\"' &
+             socat TCP-LISTEN:143,fork,reuseaddr
+               EXEC:'printf \"* OK [CAPABILITY IMAP4rev1] Dovecot ready\r\n\"' &
+             socat TCP-LISTEN:587,fork,reuseaddr
+               EXEC:'printf \"220 mail.meridian-legal.local ESMTP Submission\r\n\"' &
+             socat TCP-LISTEN:993,fork,reuseaddr
+               EXEC:'printf \"* OK Dovecot IMAP ready\r\n\"' &
+             tail -f /dev/null"
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.12
+
+  ipcam01:
+    image: alpine:3.19
+    container_name: ipcam01
+    command: >
+      sh -c "apk add --no-cache socat &&
+             socat TCP-LISTEN:554,fork,reuseaddr
+               EXEC:'printf \"RTSP/1.0 200 OK\r\nServer: HikVision-IP-Camera/v5.4.5\r\nCSeq: 1\r\n\r\n\"' &
+             socat TCP-LISTEN:8000,fork,reuseaddr
+               EXEC:'printf \"HTTP/1.1 200 OK\r\nServer: HikVision-IP-Camera/v5.4.5\r\nContent-Length: 0\r\n\r\n\"' &
+             socat TCP-LISTEN:8899,fork,reuseaddr
+               EXEC:'printf \"HTTP/1.1 200 OK\r\nServer: HikVision-ONVIF\r\nContent-Length: 0\r\n\r\n\"' &
+             tail -f /dev/null"
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.13
+
+  # ── HIGH tier (4) ──────────────────────────────────────────
+  # Static scorer → CRITICAL for all four; LLM overrides to HIGH.
+  # "Significant attack surface but not core infrastructure."
+
+  files01:
+    image: alpine:3.19
+    container_name: files01
+    command: >
+      sh -c "apk add --no-cache samba socat &&
+             mkdir -p /srv/files &&
+             adduser -D -H fileuser &&
+             cp /smb/winfs-smb.conf /etc/samba/smb.conf &&
+             socat TCP-LISTEN:135,fork,reuseaddr
+               EXEC:'printf \"MSRPC endpoint mapper ready\r\n\"' &
+             socat TCP-LISTEN:139,fork,reuseaddr
+               EXEC:'printf \"NetBIOS session ready\r\n\"' &
+             smbd --foreground --no-process-group"
+    volumes:
+      - ./samba/winfs-smb.conf:/smb/winfs-smb.conf:ro
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.20
+
+  jumpbox:
+    image: alpine:3.19
+    container_name: jumpbox
+    command: >
+      sh -c "apk add --no-cache openssh &&
+             ssh-keygen -A &&
+             printf 'Port 2222\nPermitRootLogin yes\nPasswordAuthentication yes\n'
+               > /etc/ssh/sshd_config &&
+             echo 'root:jumppass' | chpasswd &&
+             /usr/sbin/sshd -D"
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.21
+
+  appserver:
+    image: tomcat:9.0-jdk17-temurin
+    container_name: appserver
+    command: >
+      sh -c "apt-get update -qq && apt-get install -y -qq socat &&
+             socat TCP-LISTEN:8443,fork,reuseaddr
+               EXEC:'printf \"HTTP/1.1 200 OK\r\nServer: Apache Tomcat/9.0.65\r\nContent-Length: 0\r\n\r\n\"' &
+             catalina.sh run"
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.22
+
+  nas01:
+    image: alpine:3.19
+    container_name: nas01
+    command: >
+      sh -c "apk add --no-cache samba socat &&
+             mkdir -p /srv/nas &&
+             cp /smb/nas-smb.conf /etc/samba/smb.conf &&
+             socat TCP-LISTEN:5000,fork,reuseaddr
+               EXEC:'printf \"HTTP/1.1 200 OK\r\nServer: Synology DSM\r\nContent-Length: 0\r\n\r\n\"' &
+             socat TCP-LISTEN:5001,fork,reuseaddr
+               EXEC:'printf \"HTTP/1.1 200 OK\r\nServer: Synology DSM HTTPS\r\nContent-Length: 0\r\n\r\n\"' &
+             smbd --foreground --no-process-group"
+    volumes:
+      - ./samba/nas-smb.conf:/smb/nas-smb.conf:ro
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.23
+
+  # ── MEDIUM tier (3) ────────────────────────────────────────
+  # Static scorer: web01/monitor01 → CRITICAL (port 80); devbox → 0 (Generic Host).
+  # LLM overrides all three to MEDIUM based on role/product context.
+
+  web01:
+    image: nginx:alpine
+    container_name: web01
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    command: >
+      sh -c "apk add --no-cache openssl &&
+             mkdir -p /etc/nginx/ssl &&
+             openssl req -x509 -nodes -days 365 -newkey rsa:2048
+               -keyout /etc/nginx/ssl/key.pem
+               -out /etc/nginx/ssl/cert.pem
+               -subj '/CN=meridian-legal.local' 2>/dev/null &&
+             nginx -g 'daemon off;'"
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.30
+
+  devbox:
+    image: alpine:3.19
+    container_name: devbox
+    command: >
+      sh -c "apk add --no-cache openssh socat &&
+             ssh-keygen -A &&
+             printf 'PermitRootLogin yes\nPasswordAuthentication yes\n'
+               >> /etc/ssh/sshd_config &&
+             echo 'root:devpass' | chpasswd &&
+             /usr/sbin/sshd &
+             socat TCP-LISTEN:3000,fork,reuseaddr
+               EXEC:'printf \"HTTP/1.1 200 OK\r\nServer: Node.js Dev Server\r\nContent-Length: 0\r\n\r\n\"' &
+             tail -f /dev/null"
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.31
+
+  monitor01:
+    image: alpine:3.19
+    container_name: monitor01
+    command: >
+      sh -c "apk add --no-cache socat &&
+             socat TCP-LISTEN:80,fork,reuseaddr
+               EXEC:'printf \"HTTP/1.1 200 OK\r\nServer: Nagios Core/4.4.6\r\nContent-Length: 0\r\n\r\n\"' &
+             tail -f /dev/null"
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.32
+
+  # ── LOW tier (7) ───────────────────────────────────────────
+  # Workstations, printers, VoIP, UPS.
+  # printer02 and ups01 intentionally have port 80 (static scorer → CRITICAL);
+  # the LLM overrides to LOW via Xerox/APC product strings.
+
+  ws01:
+    image: alpine:3.19
+    container_name: ws01
+    command: tail -f /dev/null
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.40
+
+  ws02:
+    image: alpine:3.19
+    container_name: ws02
+    command: tail -f /dev/null
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.41
+
+  ws03:
+    image: alpine:3.19
+    container_name: ws03
+    command: >
+      sh -c "apk add --no-cache socat &&
+             socat TCP-LISTEN:3389,fork,reuseaddr
+               EXEC:'printf \"RDP ready\r\n\"' &
+             tail -f /dev/null"
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.42
+
+  printer01:
+    image: alpine:3.19
+    container_name: printer01
+    command: >
+      sh -c "apk add --no-cache socat &&
+             socat TCP-LISTEN:9100,fork,reuseaddr
+               EXEC:'printf \"HP JetDirect\r\n\"' &
+             socat TCP-LISTEN:631,fork,reuseaddr
+               EXEC:'printf \"HTTP/1.1 200 OK\r\nServer: CUPS/2.4.0\r\nContent-Length: 0\r\n\r\n\"' &
+             tail -f /dev/null"
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.50
+
+  printer02:
+    image: alpine:3.19
+    container_name: printer02
+    command: >
+      sh -c "apk add --no-cache socat &&
+             socat TCP-LISTEN:9100,fork,reuseaddr
+               EXEC:'printf \"HP JetDirect\r\n\"' &
+             socat TCP-LISTEN:631,fork,reuseaddr
+               EXEC:'printf \"HTTP/1.1 200 OK\r\nServer: CUPS/2.4.0\r\nContent-Length: 0\r\n\r\n\"' &
+             socat TCP-LISTEN:80,fork,reuseaddr
+               EXEC:'printf \"HTTP/1.1 200 OK\r\nServer: Xerox WorkCentre\r\nContent-Length: 0\r\n\r\n\"' &
+             tail -f /dev/null"
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.51
+
+  voip01:
+    image: alpine:3.19
+    container_name: voip01
+    command: >
+      sh -c "apk add --no-cache socat &&
+             socat TCP-LISTEN:5060,fork,reuseaddr
+               EXEC:'printf \"SIP/2.0 200 OK\r\nContent-Length: 0\r\n\r\n\"' &
+             tail -f /dev/null"
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.60
+
+  ups01:
+    image: alpine:3.19
+    container_name: ups01
+    command: >
+      sh -c "apk add --no-cache socat &&
+             socat TCP-LISTEN:80,fork,reuseaddr
+               EXEC:'printf \"HTTP/1.1 200 OK\r\nServer: APC Web Management\r\nContent-Length: 0\r\n\r\n\"' &
+             tail -f /dev/null"
+    networks:
+      recon_net:
+        ipv4_address: 172.20.0.61
