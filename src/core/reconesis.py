@@ -158,13 +158,18 @@ class ReconesisEngine:
         classifies all hosts, labels merged before critical_targets is assembled.
         Returns (classified, critical_targets).
         """
-        static_results = {}    # ip -> assess() return value
         evidence_bundles = []  # list of evidence bundle dicts
+
+        _VALID_TYPES = {
+            "Database Server", "Mail Server", "Firewall", "Router",
+            "Active Directory / LDAP", "Jump Host", "Web Server", "Application Server",
+            "IoT Camera", "NAS Appliance", "Windows File Server", "DNS Server", "Generic Host",
+        }
+        _VALID_CRITICALITIES = {"CRITICAL", "HIGH", "MEDIUM", "LOW"}
 
         # ── Pass 1: Static scoring + build evidence bundles ─────────────────
         for host in detailed_hosts:
             assessment = self.assessor.assess(host)
-            static_results[host["target"]] = assessment
             # Set initial labels (may be overwritten by LLM in Pass 2)
             host["criticality"] = assessment["level"]
             host["type"] = assessment["type"]
@@ -187,8 +192,10 @@ class ReconesisEngine:
         for host in detailed_hosts:
             llm = llm_lookup.get(host["target"])
             if llm:
-                host["type"] = llm.get("type", host["type"])
-                host["criticality"] = llm.get("criticality", host["criticality"])
+                llm_type = llm.get("type", host["type"])
+                llm_crit = llm.get("criticality", host["criticality"])
+                host["type"] = llm_type if llm_type in _VALID_TYPES else host["type"]
+                host["criticality"] = llm_crit if llm_crit in _VALID_CRITICALITIES else host["criticality"]
             classified.append(host)
 
             self._log(
