@@ -1,0 +1,169 @@
+import pytest
+from src.utils.toon_dialect import ToonDialect
+
+
+def _host(target="10.0.0.1", type_="Database Server", crit="CRITICAL",
+          os_name="Linux 4.15", ports=None):
+    """Build a minimal post-classification TOON host dict."""
+    return {
+        "target": target,
+        "type": type_,
+        "criticality": crit,
+        "os": {"name": os_name, "accuracy": 85},
+        "ports": ports or [],
+    }
+
+
+def _port(port=80, service="http", product="", version="",
+          auth=False, protocol="tcp", exploits=None):
+    return {
+        "port": port, "protocol": protocol, "service": service,
+        "product": product, "version": version,
+        "auth_required": auth, "scripts": [],
+        "exploits": exploits or [],
+    }
+
+
+# ── serialize_report ────────────────────────────────────────────────────────
+
+class TestSerializeReport:
+
+    def test_critical_host_full_block(self):
+        host = _host(ports=[_port(5432, "postgresql", "PostgreSQL DB", "9.6.0")])
+        result = ToonDialect.serialize_report([host])
+        assert result.startswith("10.0.0.1 D C Linux-4.15")
+        assert " 5432 postgresql PostgreSQL-DB/9.6.0" in result
+
+    def test_low_host_single_line(self):
+        host = _host(crit="LOW", type_="Generic Host",
+                     ports=[_port(80, "http")])
+        result = ToonDialect.serialize_report([host])
+        assert result.strip() == "10.0.0.1 G L"
+        assert "80" not in result
+
+    def test_medium_host_single_line(self):
+        host = _host(crit="MEDIUM", type_="Web Server",
+                     ports=[_port(80, "http")])
+        result = ToonDialect.serialize_report([host])
+        assert result.strip() == "10.0.0.1 W M"
+
+    def test_unknown_os_omitted(self):
+        host = _host(os_name="unknown",
+                     ports=[_port(22, "ssh")])
+        result = ToonDialect.serialize_report([host])
+        first_line = result.splitlines()[0]
+        assert first_line == "10.0.0.1 D C"
+
+    def test_os_spaces_replaced_with_hyphens(self):
+        host = _host(os_name="Windows Server 2019")
+        result = ToonDialect.serialize_report([host])
+        assert "Windows-Server-2019" in result.splitlines()[0]
+
+    def test_auth_required_port_gets_star(self):
+        host = _host(ports=[_port(22, "ssh", auth=True)])
+        result = ToonDialect.serialize_report([host])
+        assert " 22*" in result
+
+    def test_no_auth_port_no_star(self):
+        host = _host(ports=[_port(80, "http", auth=False)])
+        result = ToonDialect.serialize_report([host])
+        assert " 80 " in result
+        assert "80*" not in result
+
+    def test_udp_port_gets_u_prefix(self):
+        host = _host(ports=[_port(53, "domain", protocol="udp")])
+        result = ToonDialect.serialize_report([host])
+        assert " u:53 " in result
+
+    def test_tcp_protocol_omitted(self):
+        host = _host(ports=[_port(80, "http", protocol="tcp")])
+        result = ToonDialect.serialize_report([host])
+        assert "tcp" not in result
+
+    def test_empty_product_version_omitted(self):
+        host = _host(ports=[_port(80, "http", product="", version="")])
+        result = ToonDialect.serialize_report([host])
+        port_line = [l for l in result.splitlines() if "80" in l][0]
+        assert port_line.strip() == "80 http"
+
+    def test_cve_prefix_stripped(self):
+        exploit = {"cve": "CVE-1999-0862", "cvss": 2.1, "source": "nvd"}
+        host = _host(ports=[_port(5432, "postgresql", exploits=[exploit])])
+        result = ToonDialect.serialize_report([host])
+        assert "CVE-" not in result
+        assert "1999-0862:2.1:n" in result
+
+    def test_cve_source_codes(self):
+        exploits = [
+            {"cve": "CVE-0001-0001", "cvss": 9.0, "source": "nvd"},
+            {"cve": "CVE-0001-0002", "cvss": 7.5, "source": "vulners"},
+            {"cve": "CVE-0001-0003", "cvss": 5.0, "source": "circl"},
+        ]
+        host = _host(ports=[_port(5432, "postgresql", exploits=exploits)])
+        result = ToonDialect.serialize_report([host])
+        assert ":n" in result
+        assert ":v" in result
+        assert ":c" in result
+
+    def test_exploits_capped_at_5(self):
+        exploits = [
+            {"cve": f"CVE-2000-000{i}", "cvss": float(i), "source": "nvd"}
+            for i in range(8)
+        ]
+        host = _host(ports=[_port(5432, "postgresql", exploits=exploits)])
+        result = ToonDialect.serialize_report([host])
+        # Top 5 by CVSS are scores 7,6,5,4,3 → CVE ids 0007,0006,0005,0004,0003
+        assert result.count("2000-000") == 5
+        # The 3 lowest-CVSS entries must be absent
+        assert "2000-0000" not in result
+        assert "2000-0001" not in result
+        assert "2000-0002" not in result
+
+    def test_exploits_sorted_by_cvss_descending(self):
+        exploits = [
+            {"cve": "CVE-2000-0001", "cvss": 2.0, "source": "nvd"},
+            {"cve": "CVE-2000-0002", "cvss": 9.0, "source": "nvd"},
+        ]
+        host = _host(ports=[_port(5432, "postgresql", exploits=exploits)])
+        result = ToonDialect.serialize_report([host])
+        idx_high = result.index("2000-0002")
+        idx_low = result.index("2000-0001")
+        assert idx_high < idx_low  # higher CVSS first
+
+    def test_no_exploits_no_brackets(self):
+        host = _host(ports=[_port(80, "http")])
+        result = ToonDialect.serialize_report([host])
+        assert "[" not in result
+
+    def test_multiple_hosts_blank_line_separator(self):
+        h1 = _host("10.0.0.1", ports=[_port(80)])
+        h2 = _host("10.0.0.2", crit="LOW", type_="Generic Host")
+        result = ToonDialect.serialize_report([h1, h2])
+        assert "\n\n" in result
+
+    def test_port_indent_one_space(self):
+        host = _host(ports=[_port(80, "http")])
+        result = ToonDialect.serialize_report([host])
+        port_line = [l for l in result.splitlines() if "80" in l][0]
+        assert port_line.startswith(" ")
+        assert not port_line.startswith("  ")
+
+    def test_all_type_aliases(self):
+        types = [
+            ("Database Server", "D"), ("Mail Server", "M"), ("Router", "R"),
+            ("Firewall", "F"), ("Active Directory / LDAP", "A"),
+            ("Jump Host", "J"), ("Web Server", "W"), ("Application Server", "S"),
+            ("IoT Camera", "I"), ("NAS Appliance", "N"),
+            ("Windows File Server", "X"), ("DNS Server", "Z"),
+            ("Generic Host", "G"),
+        ]
+        for full_name, alias in types:
+            host = _host(type_=full_name, crit="LOW")
+            result = ToonDialect.serialize_report([host])
+            first_token = result.split()[1]
+            assert first_token == alias, f"{full_name} should map to {alias}, got {first_token}"
+
+    def test_unknown_type_falls_back_to_g(self):
+        host = _host(type_="Mystery Device", crit="LOW")
+        result = ToonDialect.serialize_report([host])
+        assert result.split()[1] == "G"
