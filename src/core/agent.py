@@ -358,13 +358,15 @@ class GroqAgent:
 
         try:
             section1, reason1 = self._query_groq(
-                self._REPORT_SECTION1_SYSTEM, user_prompt, timeout=120, max_tokens=4096
+                self._REPORT_SECTION1_SYSTEM, user_prompt, timeout=120, max_tokens=4096,
+                strip_backticks=False
             )
             if not section1 or reason1 == "error":
                 raise ValueError("Section 1 call failed")
 
             section2, reason2 = self._query_groq(
-                self._REPORT_SECTION2_SYSTEM, user_prompt, timeout=120, max_tokens=4096
+                self._REPORT_SECTION2_SYSTEM, user_prompt, timeout=120, max_tokens=4096,
+                strip_backticks=False
             )
             if not section2 or reason2 == "error":
                 raise ValueError("Section 2 call failed")
@@ -375,7 +377,8 @@ class GroqAgent:
             self.logger.warning(f"Two-section report failed ({e}), falling back to single-call")
             system_prompt, fallback_user = self._build_analysis_prompt(toon_data)
             report, finish_reason = self._query_groq(
-                system_prompt, fallback_user, timeout=120, max_tokens=4096
+                system_prompt, fallback_user, timeout=120, max_tokens=4096,
+                strip_backticks=False
             )
 
             if finish_reason == "length" and report:
@@ -388,7 +391,8 @@ class GroqAgent:
                 )
                 continuation_user = f"The report so far:\n\n{report}\n\nContinue from where the report was cut off."
                 continuation, _ = self._query_groq(
-                    continuation_system, continuation_user, timeout=120, max_tokens=2048
+                    continuation_system, continuation_user, timeout=120, max_tokens=2048,
+                    strip_backticks=False
                 )
                 if continuation:
                     report = report + "\n" + continuation
@@ -397,7 +401,7 @@ class GroqAgent:
 
     def _query_groq(self, system_prompt: str, user_prompt: str,
                     timeout: int = 30, max_tokens: int = None,
-                    temperature: float = None) -> tuple:
+                    temperature: float = None, strip_backticks: bool = True) -> tuple:
         """
         Sends a request to the Groq API using proper system/user message roles
         for stronger instruction-following.
@@ -424,9 +428,9 @@ class GroqAgent:
             response.raise_for_status()
             data = response.json()
             choice = data["choices"][0]
-            # Strip markdown code fences if the LLM wraps output
             result = choice["message"]["content"].strip()
-            result = result.replace("```", "").replace("`", "").strip()
+            if strip_backticks:
+                result = result.replace("```", "").replace("`", "").strip()
             finish_reason = choice.get("finish_reason", "stop")
             return result, finish_reason
         except requests.exceptions.HTTPError as e:
