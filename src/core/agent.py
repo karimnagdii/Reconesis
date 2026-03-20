@@ -5,6 +5,7 @@ import requests
 import json
 import logging
 from src.utils.config import Config
+from src.utils.toon_dialect import ToonDialect
 
 _DIALECT_RING = (
     "SCAN DATA is in compressed dialect:\n"
@@ -227,9 +228,8 @@ class GroqAgent:
         """Build the history context string for LLM prompts. Caps to last 2 depths."""
         if not previous_findings:
             return ""
-        recent = previous_findings[-2:] if len(previous_findings) > 2 else previous_findings
-        summary = json.dumps(recent, indent=2)
-        return f"\n\nPrevious scan findings (depth {len(previous_findings)}, showing last 2):\n{summary}\n"
+        summary = ToonDialect.compress_history(previous_findings)
+        return f"\n\nPrevious scan findings (showing last 2 depths):\n{summary}\n"
 
     def _select_system_prompt(self, phase: str, types_present: set) -> str:
         """Select the appropriate system prompt for the given phase and asset types.
@@ -340,7 +340,7 @@ class GroqAgent:
         if not evidence_bundles:
             return []
 
-        user_prompt = json.dumps(evidence_bundles, separators=(',', ':'))
+        user_prompt = ToonDialect.serialize_classify(evidence_bundles)
         try:
             result, finish_reason = self._query_groq(
                 self._CLASSIFY_SYSTEM_PROMPT,
@@ -364,11 +364,11 @@ class GroqAgent:
         Call 2: Risk Assessment + Remediation.
         Falls back to the original single-call approach if either call fails.
         """
-        slim_data = self._slim_toon(toon_data)
+        dialect_str = ToonDialect.serialize_report(toon_data)
         user_prompt = (
-            "Below is the complete scan data in TOON (Target-Oriented Object Notation) format. "
+            "Below is the complete scan data. "
             "Analyze every host, paying special attention to assets classified as Critical or High.\n\n"
-            f"SCAN DATA:\n{json.dumps(slim_data, indent=2)}"
+            f"SCAN DATA:\n{dialect_str}"
         )
 
         try:
@@ -485,51 +485,6 @@ class GroqAgent:
             self.logger.error(f"Failed to parse Groq API response: {e}")
             return "", "error"
 
-    @staticmethod
-    def _slim_toon(toon_data: list) -> list:
-        """
-        Reduces TOON payload size before sending to Groq to avoid 413 token limit errors.
-
-        Strategy:
-        - Strip raw NSE `scripts` output from all ports (already parsed into `exploits`)
-        - LOW/MEDIUM hosts: keep only target, type, criticality, and minimal port list
-        - CRITICAL/HIGH hosts: keep full detail but cap exploits to top 5 by CVSS score
-        """
-        slimmed = []
-        for host in toon_data:
-            level = host.get("criticality", "LOW")
-            if level in ("CRITICAL", "HIGH"):
-                slim_ports = []
-                for p in host.get("ports", []):
-                    slim_p = {k: v for k, v in p.items() if k != "scripts"}
-                    # Cap exploits to top 5 by CVSS
-                    if slim_p.get("exploits"):
-                        slim_p["exploits"] = sorted(
-                            slim_p["exploits"],
-                            key=lambda e: e.get("cvss", 0),
-                            reverse=True
-                        )[:5]
-                    slim_ports.append(slim_p)
-                slimmed.append({
-                    "target": host.get("target"),
-                    "type": host.get("type", "Unknown"),
-                    "criticality": level,
-                    "os": host.get("os", {}),
-                    "ports": slim_ports,
-                })
-            else:
-                # LOW/MEDIUM: just enough context to mention in topology overview
-                slimmed.append({
-                    "target": host.get("target"),
-                    "type": host.get("type", "Generic Host"),
-                    "criticality": level,
-                    "ports": [
-                        {"port": p["port"], "service": p.get("service", "")}
-                        for p in host.get("ports", [])
-                    ],
-                })
-        return slimmed
-
     def _build_analysis_prompt(self, toon_data: list) -> tuple:
         """
         Builds a structured analysis prompt with enforced report sections.
@@ -558,7 +513,8 @@ class GroqAgent:
             "with their IP, type, open ports, and risk level.\n\n"
             "# Risk Assessment\n"
             "Per-asset risk analysis with specific vulnerability details and potential impact. "
-            "For each asset, if 'exploits' data is present in any port, include a CVE table with "
+            "For each asset, if exploit data is present for any port "
+            "(shown as [yr-id:cvss:src] entries after the port line), include a CVE table with "
             "columns: CVE ID | CVSS Score | Affected Service | Source. "
             "Highlight any CVE with CVSS >= 7.0 as HIGH or CRITICAL severity.\n\n"
             "# Recommended Remediation Actions\n"
@@ -568,12 +524,14 @@ class GroqAgent:
             "Final summary and overall risk posture assessment."
         )
 
-        slim_data = self._slim_toon(toon_data)
+        system_prompt = _DIALECT_RING + system_prompt
+
+        dialect_str = ToonDialect.serialize_report(toon_data)
         user_prompt = (
-            "Below is the complete scan data in TOON (Target-Oriented Object Notation) format. "
+            "Below is the complete scan data. "
             "Analyze every host, paying special attention to assets classified as Critical or High. "
             "Identify patterns, exposed services, and potential attack vectors.\n\n"
-            f"SCAN DATA:\n{json.dumps(slim_data, indent=2)}"
+            f"SCAN DATA:\n{dialect_str}"
         )
 
         return system_prompt, user_prompt

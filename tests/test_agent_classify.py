@@ -50,12 +50,11 @@ def test_classify_calls_query_groq_with_correct_params():
     assert call_kwargs.kwargs.get("temperature") == 0
     assert call_kwargs.kwargs.get("max_tokens") == 4096
 
-def test_classify_user_prompt_is_compact_json():
+def test_classify_user_prompt_is_dialect_format():
     bundles = [{"ip": "1.2.3.4", "ports": []}]
     with patch.object(agent, "_query_groq", return_value=(VALID_RESPONSE, "stop")) as mock_q:
         agent.classify_hosts(bundles)
     user_prompt = mock_q.call_args.args[1]
-    # Compact JSON has no spaces after separators
-    assert "  " not in user_prompt  # no pretty-print indentation
-    parsed = json.loads(user_prompt)
-    assert parsed[0]["ip"] == "1.2.3.4"
+    # Dialect format: IP appears on line 1, not wrapped in JSON
+    assert "1.2.3.4" in user_prompt
+    assert not user_prompt.startswith("[")  # not a JSON array
