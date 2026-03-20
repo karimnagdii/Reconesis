@@ -340,3 +340,114 @@ class TestRunHunter:
         engine._run_hunter([{"ip": "10.0.0.1", "type": "Web Server"}])
         enriched_calls = [c for c in engine._emit.call_args_list if c[0][0] == "host_enriched"]
         assert len(enriched_calls) == 0
+
+
+class TestStartScan:
+    def _make_engine(self, discovery_hosts=None, port_scan_hosts=None, hunter_hosts=None, decide_response=None):
+        """Build an engine with controllable stubs for a full scan flow."""
+        with patch("src.core.reconesis.NmapExecutor"), \
+             patch("src.core.reconesis.GroqAgent"), \
+             patch("src.core.reconesis.TOONParser"), \
+             patch("src.core.reconesis.CriticalityAssessor"), \
+             patch("src.core.reconesis.ExploitLookup"):
+            engine = ReconesisEngine()
+
+        # Discovery returns live IPs
+        discovery_hosts = discovery_hosts or [_make_host("10.0.0.1")]
+        engine._run_discovery = MagicMock(return_value=[h["target"] for h in discovery_hosts])
+
+        # Port scan returns hosts
+        port_scan_hosts = port_scan_hosts or [_make_host("10.0.0.1", ports=[_make_port(80)])]
+        engine._run_port_scan = MagicMock(return_value=port_scan_hosts)
+
+        # Classify: return hosts as-is with criticality LOW, no critical targets
+        def fake_classify(hosts):
+            for h in hosts:
+                h.setdefault("criticality", "LOW")
+                h.setdefault("type", "Generic Host")
+                h.setdefault("metrics", [])
+            return hosts, []
+        engine._classify_hosts = MagicMock(side_effect=fake_classify)
+
+        # Hunter not called by default (no critical targets)
+        engine._run_hunter = MagicMock(return_value=True)
+
+        # decide() returns stop-after-first-depth
+        decide_response = decide_response or {"command": "nmap -sV 10.0.0.1", "continue": False, "new_targets": []}
+        engine.agent.decide = MagicMock(return_value=decide_response)
+
+        # execute_and_merge: stub out
+        engine._execute_and_merge = MagicMock()
+
+        # CVE enrichment and report: stub out
+        engine._run_cve_enrichment = MagicMock()
+        engine._generate_report = MagicMock()
+
+        # Hash: always unique to avoid early saturation
+        engine.parser.compute_hash = MagicMock(side_effect=lambda x: str(len(x)) + str(id(x)))
+
+        return engine
+
+    def test_discovery_failure_returns_early(self):
+        engine = self._make_engine()
+        engine._run_discovery = MagicMock(return_value=[])
+        engine.start_scan("10.0.0.0/24")
+        engine._generate_report.assert_not_called()
+
+    def test_port_scan_failure_at_depth_1_generates_partial_report(self):
+        engine = self._make_engine()
+        engine._run_port_scan = MagicMock(return_value=[])
+        engine.start_scan("10.0.0.0/24")
+        engine._generate_report.assert_called_once_with(partial=True)
+
+    def test_hosts_merged_into_host_map_after_observe(self):
+        engine = self._make_engine()
+        engine.start_scan("10.0.0.0/24")
+        assert "10.0.0.1" in engine._host_map
+
+    def test_cve_enrichment_and_report_called_at_end(self):
+        engine = self._make_engine()
+        engine.start_scan("10.0.0.0/24")
+        engine._run_cve_enrichment.assert_called_once()
+        engine._generate_report.assert_called_once_with()
+
+    def test_loop_terminates_when_llm_says_stop(self):
+        engine = self._make_engine(decide_response={"command": "nmap -sV 10.0.0.1", "continue": False, "new_targets": []})
+        engine.start_scan("10.0.0.0/24")
+        # Only 1 depth ran
+        assert engine.metrics["depth"] == 1
+
+    def test_new_targets_added_to_live_ips(self):
+        # LLM suggests a new target on depth 1, then says stop on depth 2
+        responses = [
+            {"command": "nmap -sV 10.0.0.1", "continue": True, "new_targets": ["10.0.1.0/24"]},
+            {"command": "nmap -sV 10.0.1.0/24", "continue": False, "new_targets": []},
+        ]
+        engine = self._make_engine()
+        engine.agent.decide = MagicMock(side_effect=responses)
+        engine.start_scan("10.0.0.0/24")
+        # Depth 2 port scan should include the new target
+        second_call_args = engine._run_port_scan.call_args_list[1][0][0]
+        assert "10.0.1.0/24" in second_call_args
+
+    def test_hunter_runs_before_gap_check(self):
+        """Critical targets should be hunter-scanned even when gap_report is empty."""
+        engine = self._make_engine()
+
+        def classify_with_critical(hosts):
+            for h in hosts:
+                h["criticality"] = "CRITICAL"
+                h["type"] = "Database Server"
+                h["metrics"] = []
+            return hosts, [{"ip": h["target"], "type": "Database Server"} for h in hosts]
+
+        engine._classify_hosts = MagicMock(side_effect=classify_with_critical)
+        # Make all gaps already filled (high OS accuracy, versions present, scripts present)
+        engine._run_port_scan = MagicMock(return_value=[
+            _make_host("10.0.0.1", os_accuracy=95, ports=[
+                _make_port(3306, version="MySQL 8.0",
+                           scripts=[{"id": "mysql-info", "output": "..."}])
+            ])
+        ])
+        engine.start_scan("10.0.0.0/24")
+        engine._run_hunter.assert_called_once()

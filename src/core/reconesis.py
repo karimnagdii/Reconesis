@@ -428,7 +428,7 @@ class ReconesisEngine:
 
     def start_scan(self, target: str):
         self.metrics["start_time"] = time.time()
-        self._all_hosts = []
+        self._host_map = {}
         self._log(f"🚀 Starting Reconesis on target: {target}")
         self._emit("status", {"phase": "discovery", "target": target})
 
@@ -444,46 +444,66 @@ class ReconesisEngine:
             self.metrics["depth"] = depth
             self._log(f"--- Depth Level {depth}/{Config.MAX_DEPTH} ---")
 
-            detailed_hosts = self._run_port_scan(live_ips)
-            if not detailed_hosts:
-                self._generate_report(partial=True)
-                return
+            # Observe
+            new_hosts = self._run_port_scan(live_ips)
+            if not new_hosts:
+                if depth == 1:
+                    self._generate_report(partial=True)
+                    return
+                else:
+                    self._log("Port scan returned no hosts at this depth — continuing with accumulated data.", "warning")
+            else:
+                for h in new_hosts:
+                    self._merge_host(h)
 
-            # Hash saturation check — stop if this depth produced no new data
-            current_hash = self.parser.compute_hash(detailed_hosts)
-            if current_hash in seen_hashes:
-                self._log("Hash saturation detected — no new information. Stopping loop.")
-                break
-            seen_hashes.add(current_hash)
-            self._all_hosts = detailed_hosts
+            # Orient
+            # _classify_hosts mutates host dicts in-place — _host_map entries are updated automatically
+            classified, critical_targets = self._classify_hosts(list(self._host_map.values()))
+            self._update_scan_history(depth, classified)
 
-            classified, critical_targets = self._classify_hosts(detailed_hosts)
+            # Hunter always runs before gap check — ensures critical hosts are deep-scanned
+            # even when no version/script gaps remain
+            if critical_targets:
+                if not self._run_hunter(critical_targets):
+                    break
 
-            # Update scan_history so subsequent LLM calls get real context
-            self.scan_history.append({
-                "depth": depth,
-                "hosts": [
-                    {
-                        "ip": h["target"],
-                        "type": h.get("type", "Unknown"),
-                        "criticality": h.get("criticality", "UNKNOWN"),
-                        "ports": [p["port"] for p in h.get("ports", [])]
-                    }
-                    for h in classified
-                ]
-            })
-
-            # Criticality fulfilment — stop if no high-value targets remain
-            if not critical_targets:
-                self._log("No critical targets found — termination criteria met.")
+            gap_report = self._compute_gaps()
+            if not gap_report:
+                self._log("No gaps remaining — termination criteria met.")
                 break
 
-            if not self._run_hunter(critical_targets):
-                break
+            # Decide
+            decision = self.agent.decide(list(self._host_map.values()), gap_report, self.scan_history)
+            if not decision:
+                fallback_cmd = self.agent.generate_strategy({
+                    "phase": "port_scan",
+                    "live_hosts": list(self._host_map.keys()),
+                    "previous_findings": self.scan_history
+                })
+                if not fallback_cmd:
+                    self._log("Both decide() and fallback generate_strategy() returned empty — stopping loop.", "warning")
+                    break
+                decision = {"command": fallback_cmd, "continue": True, "new_targets": []}
 
-            # Update live_ips for next depth from enriched results
-            live_ips = [h['target'] for h in self._all_hosts]
-            self._log(f"Depth {depth} complete. Continuing OODA loop...")
+            # Act
+            self._execute_and_merge(decision["command"])
+
+            # Termination checks
+            if not decision.get("continue", True):
+                self._log("LLM decided scan is complete.")
+                break
+            new_hash = self.parser.compute_hash(list(self._host_map.values()))
+            if new_hash in seen_hashes:
+                self._log("Hash saturation detected — no new information.")
+                break
+            seen_hashes.add(new_hash)
+
+            # Update live_ips for next depth
+            # CIDRs from new_targets always pass the IP-based dedup filter — intentional
+            new_targets = [t for t in decision.get("new_targets", []) if t not in self._host_map]
+            live_ips = list(self._host_map.keys()) + new_targets
+            if new_targets:
+                self._log(f"LLM suggested {len(new_targets)} new target(s): {new_targets}")
 
         self._run_cve_enrichment()
         self._generate_report()
