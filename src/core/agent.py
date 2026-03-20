@@ -6,6 +6,19 @@ import json
 import logging
 from src.utils.config import Config
 
+_DIALECT_RING = (
+    "SCAN DATA is in compressed dialect:\n"
+    "Line 1: <IP> <T> <C> <OS>   (fields: IP, Type, Criticality, OS-if-known)\n"
+    " M: <TopT>:<score>><RunnerT>:<score>   (classify only — Type aliases; static scorer guess)\n"
+    "   > separates top-scoring type from runner-up type on the M: line\n"
+    " <port>[u][*] <svc> <prod>/<ver> [<yr-id>:<cvss>:<src>]\n"
+    "T: D=Database M=Mail R=Router F=Firewall A=AD/LDAP J=Jump W=Web\n"
+    "   S=AppServer I=IoT N=NAS X=WinFS Z=DNS G=Generic\n"
+    "C: C=CRITICAL H=HIGH M=MEDIUM L=LOW\n"
+    "*=auth required  u=udp (default tcp)  src: n=nvd v=vulners c=circl\n"
+    "M: line values are Type aliases only (never Criticality).\n\n"
+)
+
 
 class GroqAgent:
     _OUTPUT_RULE = (
@@ -154,10 +167,9 @@ class GroqAgent:
     }
 
     _CLASSIFY_SYSTEM_PROMPT = (
-        "You are a network asset classifier for a penetration testing tool.\n"
-        "You will receive a JSON array of hosts. Each host includes open ports,\n"
-        "service data, OS fingerprints, NSE script output, and a static scoring\n"
-        "breakdown.\n\n"
+        _DIALECT_RING + "You are a network asset classifier for a penetration testing tool.\n"
+        "You will receive a list of hosts in compressed dialect format. Each host\n"
+        "includes port data, OS fingerprint, and static scoring signals on the M: line.\n\n"
         "Classify each host with:\n"
         "- type: one of [Database Server, Mail Server, Firewall, Router,\n"
         "  Active Directory / LDAP, Jump Host, Web Server, Application Server,\n"
@@ -175,11 +187,12 @@ class GroqAgent:
         "- LOW = printers, UPS/PDU, VoIP phones, access controllers, generic noise\n"
         "- When the static scorer fires on a single common port (80, 443, 445) with no\n"
         "  corroborating product string or NSE evidence, treat it with skepticism\n"
-        "- Return ONLY a valid JSON array. No prose, no markdown, no code fences."
+        "- Return ONLY a valid JSON array. No prose, no markdown, no code fences.\n"
+        "T and C shown are static scorer guesses — verify against M: signals and port data, correct if wrong."
     )
 
     _REPORT_SECTION1_SYSTEM = (
-        "You are a Senior Cybersecurity Analyst reviewing automated network reconnaissance results.\n"
+        _DIALECT_RING + "You are a Senior Cybersecurity Analyst reviewing automated network reconnaissance results.\n"
         "Write the FIRST HALF of a professional report in Markdown. Use formal technical English. No emoji.\n\n"
         "Write ONLY these two sections — nothing else:\n\n"
         "# Executive Summary\n"
@@ -191,12 +204,12 @@ class GroqAgent:
     )
 
     _REPORT_SECTION2_SYSTEM = (
-        "You are a Senior Cybersecurity Analyst reviewing automated network reconnaissance results.\n"
+        _DIALECT_RING + "You are a Senior Cybersecurity Analyst reviewing automated network reconnaissance results.\n"
         "Write the SECOND HALF of a professional report in Markdown. Use formal technical English. No emoji.\n\n"
         "Write ONLY these two sections — nothing else:\n\n"
         "# Risk Assessment\n"
         "Per-asset risk analysis for each CRITICAL and HIGH host. "
-        "If 'exploits' data is present for any port, include a CVE table with columns: "
+        "If exploit data is present for any port (shown as [yr-id:cvss:src] entries after the port line), include a CVE table with columns: "
         "CVE ID | CVSS Score | Affected Service | Source. "
         "Highlight CVEs with CVSS >= 7.0 as HIGH or CRITICAL severity.\n\n"
         "# Recommended Remediation Actions\n"
