@@ -291,3 +291,52 @@ class TestGroqAgentDecide:
         agent = self._make_agent('{"command": "nmap -sS 10.0.0.1", "continue": false, "new_targets": []}')
         result = agent.decide(hosts=[], gap_report=[], scan_history=[])
         assert result["continue"] is False
+
+
+class TestRunHunter:
+    def _make_engine(self):
+        with patch("src.core.reconesis.NmapExecutor"), \
+             patch("src.core.reconesis.GroqAgent"), \
+             patch("src.core.reconesis.TOONParser"), \
+             patch("src.core.reconesis.CriticalityAssessor"), \
+             patch("src.core.reconesis.ExploitLookup"):
+            engine = ReconesisEngine()
+        return engine
+
+    def test_returns_false_when_no_hunter_command(self):
+        engine = self._make_engine()
+        engine.agent.generate_strategy.return_value = ""
+        result = engine._run_hunter([{"ip": "10.0.0.1", "type": "Web Server"}])
+        assert result is False
+
+    def test_returns_true_on_successful_scan(self):
+        engine = self._make_engine()
+        engine.agent.generate_strategy.return_value = "nmap -sV 10.0.0.1"
+        engine.executor.execute.return_value = ("<xml>", 5)
+        engine.parser.parse.return_value = [_make_host("10.0.0.1", ports=[_make_port(443, version="nginx")])]
+        engine._merge_host(_make_host("10.0.0.1", ports=[_make_port(80)]))
+        result = engine._run_hunter([{"ip": "10.0.0.1", "type": "Web Server"}])
+        assert result is True
+
+    def test_hunter_enriches_existing_host_via_merge(self):
+        engine = self._make_engine()
+        engine.agent.generate_strategy.return_value = "nmap -sV 10.0.0.1"
+        engine.executor.execute.return_value = ("<xml>", 5)
+        engine.parser.parse.return_value = [_make_host("10.0.0.1", ports=[_make_port(22, version="OpenSSH 8.0")])]
+        engine._merge_host(_make_host("10.0.0.1", ports=[_make_port(22, version="")]))
+        engine._run_hunter([{"ip": "10.0.0.1", "type": "Generic Host"}])
+        port = engine._host_map["10.0.0.1"]["ports"][0]
+        assert port["version"] == "OpenSSH 8.0"
+
+    def test_hunter_enriched_event_emitted_only_on_change(self):
+        engine = self._make_engine()
+        engine._emit = MagicMock()
+        engine.agent.generate_strategy.return_value = "nmap -sV 10.0.0.1"
+        engine.executor.execute.return_value = ("<xml>", 5)
+        # Hunter returns same data as what's already in host_map (no change)
+        host = _make_host("10.0.0.1", ports=[_make_port(80, version="Apache")])
+        engine._merge_host(host)
+        engine.parser.parse.return_value = [_make_host("10.0.0.1", ports=[_make_port(80, version="Apache")])]
+        engine._run_hunter([{"ip": "10.0.0.1", "type": "Web Server"}])
+        enriched_calls = [c for c in engine._emit.call_args_list if c[0][0] == "host_enriched"]
+        assert len(enriched_calls) == 0

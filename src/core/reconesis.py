@@ -337,19 +337,11 @@ class ReconesisEngine:
         self.metrics["total_packets"] += pkts
         if hunter_xml:
             hunter_hosts = self.parser.parse(hunter_xml)
-            hunter_map = {h['target']: h for h in hunter_hosts}
-            for host in self._all_hosts:
-                if host['target'] in hunter_map:
-                    new_ports = hunter_map[host['target']].get('ports', [])
-                    existing_port_idx = {p['port']: i for i, p in enumerate(host.get('ports', []))}
-                    for p in new_ports:
-                        if p['port'] in existing_port_idx:
-                            host['ports'][existing_port_idx[p['port']]] = p
-                        else:
-                            host['ports'].append(p)
+            for host in hunter_hosts:
+                if self._merge_host(host):
                     self._emit("host_enriched", {
-                        "ip": host['target'],
-                        "ports": host['ports']
+                        "ip": host["target"],
+                        "ports": self._host_map[host["target"]]["ports"]
                     })
         else:
             self._log("Hunter scan produced no output.", "warning")
