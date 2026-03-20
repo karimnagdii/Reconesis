@@ -48,7 +48,7 @@ def test_classify_calls_query_groq_with_correct_params():
     call_kwargs = mock_q.call_args
     assert call_kwargs.kwargs.get("timeout") == 120
     assert call_kwargs.kwargs.get("temperature") == 0
-    assert call_kwargs.kwargs.get("max_tokens") == 2048
+    assert call_kwargs.kwargs.get("max_tokens") == 4096
 
 def test_classify_user_prompt_is_compact_json():
     bundles = [{"ip": "1.2.3.4", "ports": []}]

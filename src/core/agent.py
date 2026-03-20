@@ -331,7 +331,7 @@ class GroqAgent:
                 self._CLASSIFY_SYSTEM_PROMPT,
                 user_prompt,
                 timeout=120,
-                max_tokens=2048,
+                max_tokens=4096,
                 temperature=0,
             )
             if not result or finish_reason == "error":
