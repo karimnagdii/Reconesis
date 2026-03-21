@@ -444,7 +444,8 @@ class GroqAgent:
         system_prompt = self._select_system_prompt(phase, types_present)
         user_prompt = self._build_user_prompt(phase, context_data, history_context)
 
-        result, _ = self._query_groq(system_prompt, user_prompt)
+        result, _ = self._query_groq(system_prompt, user_prompt,
+                                      phase=context_data.get("phase", "discovery"))
         return result
 
     def classify_hosts(self, evidence_bundles: list) -> list:
@@ -464,6 +465,7 @@ class GroqAgent:
                 timeout=120,
                 max_tokens=4096,
                 temperature=0,
+                phase="classification",
             )
             if not result:
                 self.logger.warning("classify_hosts: empty or error response from Groq")
@@ -496,14 +498,14 @@ class GroqAgent:
         try:
             section1, reason1 = self._query_groq(
                 self._REPORT_SECTION1_SYSTEM, user_prompt, timeout=120, max_tokens=4096,
-                strip_backticks=False
+                strip_backticks=False, phase="reporting"
             )
             if not section1:
                 raise ValueError("Section 1 call failed")
 
             section2, reason2 = self._query_groq(
                 self._REPORT_SECTION2_SYSTEM, user_prompt, timeout=120, max_tokens=4096,
-                strip_backticks=False
+                strip_backticks=False, phase="reporting"
             )
             if not section2:
                 raise ValueError("Section 2 call failed")
@@ -515,7 +517,7 @@ class GroqAgent:
             system_prompt, fallback_user = self._build_analysis_prompt(toon_data)
             report, finish_reason = self._query_groq(
                 system_prompt, fallback_user, timeout=120, max_tokens=4096,
-                strip_backticks=False
+                strip_backticks=False, phase="reporting"
             )
 
             if finish_reason == "length" and report:
@@ -529,7 +531,7 @@ class GroqAgent:
                 continuation_user = f"The report so far:\n\n{report}\n\nContinue from where the report was cut off."
                 continuation, _ = self._query_groq(
                     continuation_system, continuation_user, timeout=120, max_tokens=2048,
-                    strip_backticks=False
+                    strip_backticks=False, phase="reporting"
                 )
                 if continuation:
                     report = report + "\n" + continuation
@@ -538,12 +540,20 @@ class GroqAgent:
 
     def _query_groq(self, system_prompt: str, user_prompt: str,
                     timeout: int = 30, max_tokens: int = None,
-                    temperature: float = None, strip_backticks: bool = True) -> tuple:
+                    temperature: float = None, strip_backticks: bool = True,
+                    phase: str = "unknown") -> tuple:
         """
         Sends a request to the Groq API using proper system/user message roles
         for stronger instruction-following.
         Returns (content, finish_reason) tuple.
         """
+        current_id = self._call_id
+        self._emit("ai_prompt", {
+            "call_id": current_id,
+            "phase": phase,
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+        })
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
@@ -569,6 +579,12 @@ class GroqAgent:
             if strip_backticks:
                 result = result.replace("```", "").replace("`", "").strip()
             finish_reason = choice.get("finish_reason", "stop")
+            self._emit("ai_response", {
+                "call_id": current_id,
+                "phase": phase,
+                "raw_response": result,
+            })
+            self._call_id += 1
             return result, finish_reason
         except requests.exceptions.HTTPError as e:
             status_code = e.response.status_code if e.response else "unknown"
@@ -597,6 +613,12 @@ class GroqAgent:
                             result = choice["message"]["content"].strip()
                             if strip_backticks:
                                 result = result.replace("```", "").replace("`", "").strip()
+                            self._emit("ai_response", {
+                                "call_id": current_id,
+                                "phase": phase,
+                                "raw_response": result,
+                            })
+                            self._call_id += 1
                             return result, choice.get("finish_reason", "stop")
                         except requests.exceptions.HTTPError as retry_e:
                             if retry_e.response is not None and retry_e.response.status_code == 429:
@@ -703,6 +725,7 @@ class GroqAgent:
                 system_prompt=system_prompt,
                 user_prompt=user_content,
                 strip_backticks=False,
+                phase=f"depth{context['depth']}",
             )
         except (ReconesisAPIError, ReconesisParseError):
             raise

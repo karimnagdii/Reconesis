@@ -346,6 +346,8 @@ class TestDecideForDepth:
             agent.api_url = "http://fake"
             agent.api_key = "fake"
             agent.model = "fake-model"
+            agent._call_id = 1
+            agent._emit = lambda t, d: None
             return agent
 
     def _make_context(self, depth=1):
