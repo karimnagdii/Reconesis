@@ -1,4 +1,5 @@
 
+import re
 import logging
 import json
 import time
@@ -103,6 +104,28 @@ class ReconesisEngine:
         return own_ips
 
     @staticmethod
+    def _extract_port_set(command: str) -> set:
+        """Extract all port numbers from the -p argument of an nmap command."""
+        m = re.search(r'-p\s+(\S+)', command)
+        if not m:
+            return set()
+        ports = set()
+        for part in m.group(1).split(','):
+            part = re.sub(r'^[TUtu]:', '', part.strip())
+            if '-' in part:
+                try:
+                    lo, hi = part.split('-', 1)
+                    ports.update(range(int(lo), min(int(hi) + 1, 65536)))
+                except ValueError:
+                    pass
+            else:
+                try:
+                    ports.add(int(part))
+                except ValueError:
+                    pass
+        return ports
+
+    @staticmethod
     def _is_richer(new_port: dict, existing_port: dict) -> bool:
         """Returns True if new_port adds version, product, script, or exploit data that existing lacks."""
         if new_port.get("version") and not existing_port.get("version"):
@@ -171,7 +194,7 @@ class ReconesisEngine:
                 })
         return gaps
 
-    def _update_scan_history(self, depth: int, classified: list):
+    def _update_scan_history(self, depth: int, classified: list, commands: list = None):
         """Append a scan-history entry for the current OODA depth.
 
         Called after the Orient phase so the history always reflects fully-classified host
@@ -181,6 +204,7 @@ class ReconesisEngine:
         Args:
             depth: Current loop depth (1-indexed), stored verbatim in the entry.
             classified: List of classified host dicts as returned by _classify_hosts().
+            commands: List of nmap command strings executed during this depth.
         """
         self.scan_history.append({
             "depth": depth,
@@ -188,11 +212,11 @@ class ReconesisEngine:
                 {
                     "ip": h["target"],
                     "type": h.get("type", "Unknown"),
-                    "criticality": h.get("criticality", "UNKNOWN"),
                     "ports": [p["port"] for p in h.get("ports", [])]
                 }
                 for h in classified
-            ]
+            ],
+            "commands": commands or [],
         })
 
     def _execute_and_merge(self, command: str, inject_vulners: bool = False):
@@ -328,16 +352,21 @@ class ReconesisEngine:
         self._all_hosts = self.exploit_lookup.enrich_from_cpe(self._all_hosts)
 
         for host in self._all_hosts:
-            cves = []
+            seen = {}  # cve_id -> best entry (highest CVSS)
             for port in host.get("ports", []):
                 for exploit in port.get("exploits", []):
-                    cves.append({
-                        "port": port["port"],
-                        "service": port["service"],
-                        "cve": exploit.get("cve", ""),
-                        "cvss": exploit.get("cvss", 0),
-                        "source": exploit.get("source", "")
-                    })
+                    cve_id = exploit.get("cve", "")
+                    if not cve_id:
+                        continue
+                    if cve_id not in seen or exploit.get("cvss", 0) > seen[cve_id]["cvss"]:
+                        seen[cve_id] = {
+                            "port": port["port"],
+                            "service": port["service"],
+                            "cve": cve_id,
+                            "cvss": exploit.get("cvss", 0),
+                            "source": exploit.get("source", ""),
+                        }
+            cves = list(seen.values())
             if cves:
                 self._emit("cves_found", {"ip": host["target"], "cves": cves})
                 self._log(f"  {host['target']}: {len(cves)} CVE(s) found")
@@ -398,59 +427,82 @@ class ReconesisEngine:
 
         self.logger.info("Reconesis Task Completed.")
 
-    def _mini_loop(self, context: dict, inject_vulners: bool = False) -> None:
+    def _mini_loop(self, context: dict, inject_vulners: bool = False) -> list:
         """Drive one depth's scan cycle. Calls decide_for_depth() up to MAX_SUB_ITERATIONS
         times, merging results after each command. Exits early on continue:false, hash
         saturation, or API/parse error. inject_vulners is forwarded to _execute_and_merge().
 
         Computes gap_map from _compute_gaps() before each decide_for_depth() call and
         injects it into context["gap_map"] so GroqAgent can call render_with_gaps()
-        without accessing engine state directly."""
+        without accessing engine state directly.
+
+        Returns:
+            List of nmap command strings that were executed during this depth.
+        """
+        depth = context.get("depth", 0)
         prev_hash = ""
+        commands_run: list = []
+        scanned_ports: set = set()
+
         for _ in range(Config.MAX_SUB_ITERATIONS):
             # Compute gap_map on the engine side (has access to _compute_gaps and _host_map)
             gap_report = self._compute_gaps()
             context["gap_map"] = {g["ip"]: g["gaps"] for g in gap_report}
 
+            # Inject scanned ports into context for depth1 so LLM avoids duplicates
+            if depth == 1 and scanned_ports:
+                context["scanned_ports"] = scanned_ports
+
             try:
                 decision = self.agent.decide_for_depth(context)
             except (ReconesisAPIError, ReconesisParseError) as e:
-                self._log(f"decide_for_depth error in depth {context['depth']}: {e}", "warning")
+                self._log(f"decide_for_depth error in depth {depth}: {e}", "warning")
                 break
 
             if not decision or not decision.get("command"):
                 break
 
-            self._execute_and_merge(decision["command"], inject_vulners=inject_vulners)
+            cmd = decision["command"]
+            commands_run.append(cmd)
+
+            # Track scanned ports in depth1 to inform subsequent iterations
+            if depth == 1:
+                scanned_ports.update(self._extract_port_set(cmd))
+
+            self._execute_and_merge(cmd, inject_vulners=inject_vulners)
 
             # Hash is computed before stub seeding so new_targets additions don't
             # artificially advance the hash and prevent saturation detection.
             new_hash = self.parser.compute_hash(list(self._host_map.values()))
 
-            new_targets = [t for t in decision.get("new_targets", []) if t not in self._host_map]
-            for t in new_targets:
-                self._host_map[t] = {
-                    "target": t, "status": "up",
-                    "os": {"name": "unknown", "accuracy": 0},
-                    "ports": [], "criticality": "UNKNOWN", "type": "Unknown",
-                }
-            if new_targets:
-                self._log(f"Depth {context['depth']}: seeded {len(new_targets)} new target(s): {new_targets}")
+            # Depth1: ignore new_targets to prevent LLM from hallucinating adjacent subnets
+            if depth != 1:
+                new_targets = [t for t in decision.get("new_targets", []) if t not in self._host_map]
+                for t in new_targets:
+                    self._host_map[t] = {
+                        "target": t, "status": "up",
+                        "os": {"name": "unknown", "accuracy": 0},
+                        "ports": [], "criticality": "UNKNOWN", "type": "Unknown",
+                    }
+                if new_targets:
+                    self._log(f"Depth {depth}: seeded {len(new_targets)} new target(s): {new_targets}")
 
             if not decision.get("continue", True):
-                self._log(f"Depth {context['depth']}: LLM signalled complete.")
+                self._log(f"Depth {depth}: LLM signalled complete.")
                 break
 
             if new_hash == prev_hash:
-                self._log(f"Depth {context['depth']}: hash saturation — no new information.")
+                self._log(f"Depth {depth}: hash saturation — no new information.")
                 break
             prev_hash = new_hash
 
             context["scan_history"] = self.scan_history
             context["hosts"] = list(self._host_map.values())
 
-    def _run_depth1_mapping(self, live_ips: list) -> None:
-        """Depth 1: broad network mapping over all discovered hosts."""
+        return commands_run
+
+    def _run_depth1_mapping(self, live_ips: list) -> list:
+        """Depth 1: broad network mapping over all discovered hosts. Returns commands executed."""
         self._log("DEPTH 1: Network Mapping — building complete network picture")
         self._emit("status", {"phase": "depth1_mapping"})
         context = {
@@ -460,10 +512,10 @@ class ReconesisEngine:
             "hosts": list(self._host_map.values()),
             "scan_history": self.scan_history,
         }
-        self._mini_loop(context, inject_vulners=False)
+        return self._mini_loop(context, inject_vulners=False)
 
-    def _run_depth2_deep_dive(self, critical_high_hosts: list) -> None:
-        """Depth 2: deep fingerprint on CRITICAL/HIGH hosts only."""
+    def _run_depth2_deep_dive(self, critical_high_hosts: list) -> list:
+        """Depth 2: deep fingerprint on CRITICAL/HIGH hosts only. Returns commands executed."""
         self._log(f"DEPTH 2: Deep Fingerprint — {len(critical_high_hosts)} CRITICAL/HIGH assets")
         self._emit("status", {"phase": "depth2_deep_dive", "targets": critical_high_hosts})
         target_hosts = [self._host_map[t["ip"]] for t in critical_high_hosts if t["ip"] in self._host_map]
@@ -474,10 +526,10 @@ class ReconesisEngine:
             "hosts": list(self._host_map.values()),
             "scan_history": self.scan_history,
         }
-        self._mini_loop(context, inject_vulners=True)
+        return self._mini_loop(context, inject_vulners=False)
 
-    def _run_depth3_deepest(self, critical_high_hosts: list) -> None:
-        """Depth 3: vulnerability enumeration on CRITICAL/HIGH hosts."""
+    def _run_depth3_deepest(self, critical_high_hosts: list) -> list:
+        """Depth 3: vulnerability enumeration on CRITICAL/HIGH hosts. Returns commands executed."""
         self._log(f"DEPTH 3: Vulnerability Enumeration — {len(critical_high_hosts)} targets")
         self._emit("status", {"phase": "depth3_deepest", "targets": critical_high_hosts})
         target_hosts = [self._host_map[t["ip"]] for t in critical_high_hosts if t["ip"] in self._host_map]
@@ -488,7 +540,7 @@ class ReconesisEngine:
             "hosts": list(self._host_map.values()),
             "scan_history": self.scan_history,
         }
-        self._mini_loop(context, inject_vulners=True)
+        return self._mini_loop(context, inject_vulners=True)
 
     def start_scan(self, target: str):
         self.metrics["start_time"] = time.time()
@@ -509,7 +561,7 @@ class ReconesisEngine:
                 }
 
         # Depth 1: broad network mapping
-        self._run_depth1_mapping(live_ips)
+        commands1 = self._run_depth1_mapping(live_ips)
         self.metrics["depth"] = 1
 
         # Hybrid classification: static scorer evidence + LLM final labels
@@ -521,18 +573,18 @@ class ReconesisEngine:
                 self._host_map[ip]["criticality"] = host["criticality"]
         self.metrics["total_hosts"] = len(classified)
         self.metrics["critical_hosts"] = len(critical_high_hosts)
-        self._update_scan_history(1, classified)
+        self._update_scan_history(1, classified, commands1)
 
         # Depth 2: deep fingerprint (CRITICAL/HIGH only)
         if critical_high_hosts:
-            self._run_depth2_deep_dive(critical_high_hosts)
+            commands2 = self._run_depth2_deep_dive(critical_high_hosts)
             self.metrics["depth"] = 2
-            self._update_scan_history(2, list(self._host_map.values()))
+            self._update_scan_history(2, list(self._host_map.values()), commands2)
 
             # Depth 3: vulnerability enumeration (same targets)
-            self._run_depth3_deepest(critical_high_hosts)
+            commands3 = self._run_depth3_deepest(critical_high_hosts)
             self.metrics["depth"] = 3
-            self._update_scan_history(3, list(self._host_map.values()))
+            self._update_scan_history(3, list(self._host_map.values()), commands3)
 
         self._run_cve_enrichment()
         self._generate_report()

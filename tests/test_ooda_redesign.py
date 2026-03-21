@@ -339,6 +339,7 @@ class TestComputeGapsAdditional:
 
 class TestDecideForDepth:
     def _make_agent(self):
+        from collections import deque
         with patch("src.core.agent.Config"):
             agent = GroqAgent.__new__(GroqAgent)
             agent.logger = MagicMock()
@@ -348,6 +349,7 @@ class TestDecideForDepth:
             agent.model = "fake-model"
             agent._call_id = 1
             agent._emit = lambda t, d: None
+            agent._call_timestamps = deque()
             return agent
 
     def _make_context(self, depth=1):
@@ -489,6 +491,20 @@ class TestMiniLoop:
         assert call_count[0] == Config.MAX_SUB_ITERATIONS
 
     def test_seeds_new_targets_as_stubs(self):
+        # new_targets are seeded in depth2+ but ignored in depth1
+        engine = self._make_engine()
+        engine.agent.decide_for_depth = MagicMock(return_value=self._make_decision(
+            cont=False, new_targets=["10.0.0.99"]))
+        engine.parser.compute_hash = MagicMock(return_value="h1")
+        engine._compute_gaps = MagicMock(return_value=[])
+        ctx = {"depth": 2, "depth_purpose": "", "target_hosts": [],
+               "hosts": [], "scan_history": []}
+        engine._mini_loop(ctx)
+        assert "10.0.0.99" in engine._host_map
+        assert engine._host_map["10.0.0.99"]["status"] == "up"
+
+    def test_depth1_ignores_new_targets(self):
+        # Depth1 must not seed new_targets to prevent LLM from hallucinating subnets
         engine = self._make_engine()
         engine.agent.decide_for_depth = MagicMock(return_value=self._make_decision(
             cont=False, new_targets=["10.0.0.99"]))
@@ -497,8 +513,7 @@ class TestMiniLoop:
         ctx = {"depth": 1, "depth_purpose": "", "target_hosts": [],
                "hosts": [], "scan_history": []}
         engine._mini_loop(ctx)
-        assert "10.0.0.99" in engine._host_map
-        assert engine._host_map["10.0.0.99"]["status"] == "up"
+        assert "10.0.0.99" not in engine._host_map
 
     def test_inject_vulners_forwarded(self):
         engine = self._make_engine()
@@ -584,7 +599,8 @@ class TestRunDepth2DeepDive:
             engine._mini_loop = MagicMock()
             return engine
 
-    def test_calls_mini_loop_with_depth2_and_inject_vulners(self):
+    def test_calls_mini_loop_with_depth2_no_inject_vulners(self):
+        # Depth2 does NOT inject vulners — that is reserved for depth3 only
         engine = self._make_engine()
         engine._host_map = {"10.0.0.1": _make_host("10.0.0.1")}
         critical_high = [{"ip": "10.0.0.1", "type": "Database Server"}]
@@ -592,7 +608,7 @@ class TestRunDepth2DeepDive:
         assert engine._mini_loop.called
         ctx = engine._mini_loop.call_args[0][0]
         assert ctx["depth"] == 2
-        assert engine._mini_loop.call_args[1].get("inject_vulners") is True
+        assert engine._mini_loop.call_args[1].get("inject_vulners") is False
 
     def test_resolves_target_hosts_from_host_map(self):
         engine = self._make_engine()
@@ -623,5 +639,94 @@ class TestRunDepth3Deepest:
         ctx = engine._mini_loop.call_args[0][0]
         assert ctx["depth"] == 3
         assert engine._mini_loop.call_args[1].get("inject_vulners") is True
+
+
+class TestRunCveEnrichmentDedup:
+
+    def _make_engine(self):
+        """Construct ReconesisEngine with all external collaborators patched out."""
+        with patch("src.core.reconesis.NmapExecutor"), \
+             patch("src.core.reconesis.GroqAgent"), \
+             patch("src.core.reconesis.TOONParser"), \
+             patch("src.core.reconesis.CriticalityAssessor"), \
+             patch("src.core.reconesis.ExploitLookup"):
+            return ReconesisEngine()
+
+    def _engine_with_hosts(self, hosts):
+        """Build an engine, replace enrichment with no-ops, load hosts."""
+        engine = self._make_engine()
+        # Bypass real NVD calls — enrichment is tested in test_exploit_lookup.py
+        engine.exploit_lookup.enrich_from_nse = lambda h: h
+        engine.exploit_lookup.enrich_from_cpe = lambda h: h
+        engine._all_hosts = hosts
+        return engine
+
+    def test_same_cve_on_two_ports_emitted_once(self):
+        """CVE-2020-1472 on port 139 and 445 — only one entry in cves_found."""
+        host = _make_host(ip="10.0.0.1", ports=[
+            _make_port(port=139, service="netbios-ssn", exploits=[
+                {"cve": "CVE-2020-1472", "cvss": 10.0, "source": "vulners"}
+            ]),
+            _make_port(port=445, service="microsoft-ds", exploits=[
+                {"cve": "CVE-2020-1472", "cvss": 10.0, "source": "vulners"}
+            ]),
+        ])
+        host["criticality"] = "CRITICAL"
+
+        emitted = []
+        engine = self._engine_with_hosts([host])
+        engine._emit = lambda t, d: emitted.append((t, d)) if t == "cves_found" else None
+
+        engine._run_cve_enrichment()
+
+        cve_events = [d for t, d in emitted if t == "cves_found"]
+        assert len(cve_events) == 1
+        cves = cve_events[0]["cves"]
+        cve_ids = [c["cve"] for c in cves]
+        assert cve_ids.count("CVE-2020-1472") == 1
+
+    def test_keeps_highest_cvss_when_same_cve_on_multiple_ports(self):
+        """Same CVE on port 139 (CVSS 7.0) and port 445 (CVSS 9.8) — emit 9.8."""
+        host = _make_host(ip="10.0.0.2", ports=[
+            _make_port(port=139, service="netbios-ssn", exploits=[
+                {"cve": "CVE-2021-0001", "cvss": 7.0, "source": "vulners"}
+            ]),
+            _make_port(port=445, service="microsoft-ds", exploits=[
+                {"cve": "CVE-2021-0001", "cvss": 9.8, "source": "vulners"}
+            ]),
+        ])
+        host["criticality"] = "HIGH"
+
+        emitted = []
+        engine = self._engine_with_hosts([host])
+        engine._emit = lambda t, d: emitted.append((t, d)) if t == "cves_found" else None
+
+        engine._run_cve_enrichment()
+
+        cve_events = [d for t, d in emitted if t == "cves_found"]
+        cves = cve_events[0]["cves"]
+        match = next(c for c in cves if c["cve"] == "CVE-2021-0001")
+        assert match["cvss"] == 9.8
+
+    def test_skips_exploit_with_blank_cve_id(self):
+        """Exploit with empty cve field is not emitted."""
+        host = _make_host(ip="10.0.0.3", ports=[
+            _make_port(port=80, service="http", exploits=[
+                {"cve": "", "cvss": 5.0, "source": "vulners"},
+                {"cve": "CVE-2022-1234", "cvss": 8.0, "source": "vulners"},
+            ]),
+        ])
+        host["criticality"] = "HIGH"
+
+        emitted = []
+        engine = self._engine_with_hosts([host])
+        engine._emit = lambda t, d: emitted.append((t, d)) if t == "cves_found" else None
+
+        engine._run_cve_enrichment()
+
+        cve_events = [d for t, d in emitted if t == "cves_found"]
+        cve_ids = [c["cve"] for c in cve_events[0]["cves"]]
+        assert "" not in cve_ids
+        assert "CVE-2022-1234" in cve_ids
 
 
