@@ -548,6 +548,7 @@ class GroqAgent:
         Returns (content, finish_reason) tuple.
         """
         current_id = self._call_id
+        self._call_id += 1   # always advance — counter must not get stuck on exception
         self._emit("ai_prompt", {
             "call_id": current_id,
             "phase": phase,
@@ -584,7 +585,6 @@ class GroqAgent:
                 "phase": phase,
                 "raw_response": result,
             })
-            self._call_id += 1
             return result, finish_reason
         except requests.exceptions.HTTPError as e:
             status_code = e.response.status_code if e.response else "unknown"
@@ -618,7 +618,6 @@ class GroqAgent:
                                 "phase": phase,
                                 "raw_response": result,
                             })
-                            self._call_id += 1
                             return result, choice.get("finish_reason", "stop")
                         except requests.exceptions.HTTPError as retry_e:
                             if retry_e.response is not None and retry_e.response.status_code == 429:

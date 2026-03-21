@@ -81,3 +81,21 @@ def test_prompt_and_response_share_call_id():
     prompt_id = next(e[1]["call_id"] for e in events if e[0] == "ai_prompt")
     response_id = next(e[1]["call_id"] for e in events if e[0] == "ai_response")
     assert prompt_id == response_id
+
+
+def test_call_id_advances_after_failed_call():
+    events = []
+    agent = GroqAgent(event_callback=lambda t, d: events.append((t, d)))
+    # First call: simulate HTTP exception (raises, no ai_response)
+    with patch.object(agent._session, "post", side_effect=Exception("connection failed")):
+        try:
+            agent._query_groq("sys", "fail", phase="depth1")
+        except Exception:
+            pass
+    # Second call: succeeds
+    with patch.object(agent._session, "post", return_value=_make_mock_response("nmap -sS 1.1.1.1")):
+        agent._query_groq("sys", "user2", phase="depth2")
+    prompt_ids = [e[1]["call_id"] for e in events if e[0] == "ai_prompt"]
+    response_ids = [e[1]["call_id"] for e in events if e[0] == "ai_response"]
+    assert prompt_ids == [1, 2]       # two prompts emitted, each with distinct id
+    assert response_ids == [2]        # only one response (call #2 succeeded)
