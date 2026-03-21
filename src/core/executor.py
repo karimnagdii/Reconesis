@@ -89,20 +89,9 @@ class NmapExecutor:
             stdout_thread.start()
             stderr_thread.start()
 
-            start = time.time()
-            last_heartbeat = start
-            while proc.poll() is None:
-                elapsed = time.time() - start
-                if elapsed > 300:
-                    proc.kill()
-                    stdout_thread.join(timeout=5)
-                    stderr_thread.join(timeout=5)
-                    self.logger.error("Nmap timed out after 300s")
-                    return None, 0
-                if time.time() - last_heartbeat >= 10:
-                    self._emit("log", {"level": "info", "message": f"Nmap running… ({elapsed:.0f}s elapsed)"})
-                    last_heartbeat = time.time()
-                time.sleep(1)
+            completed = self._wait_with_timeout(proc, 300, stdout_thread, stderr_thread)
+            if not completed:
+                return None, 0
 
             stdout_thread.join()
             stderr_thread.join()
@@ -126,12 +115,44 @@ class NmapExecutor:
             return stdout, packets
 
         except subprocess.TimeoutExpired:
-            # Not reachable: timeout is enforced by the manual proc.kill() in the poll loop above.
+            # Not reachable: timeout is enforced inside _wait_with_timeout via proc.kill().
             self.logger.error("Nmap scan timed out after 300 seconds.")
             return None, 0
         except Exception as e:
             self.logger.error(f"Execution failed: {e}")
             return None, 0
+
+    def _wait_with_timeout(
+        self,
+        proc: "subprocess.Popen",
+        timeout_secs: int,
+        stdout_thread: "threading.Thread",
+        stderr_thread: "threading.Thread",
+    ) -> bool:
+        """Wait for proc to finish, enforcing timeout_secs.
+        Background reader threads must be started BEFORE calling this method.
+        Returns True if process exited normally, False if it timed out and was killed.
+
+        # PERF: replaces time.sleep(1) busy-poll — eliminates ~0.5s avg latency per run (L-4)
+        """
+        start = time.time()
+        last_heartbeat = start
+        while True:
+            elapsed = time.time() - start
+            if elapsed > timeout_secs:
+                proc.kill()
+                stdout_thread.join(timeout=5)
+                stderr_thread.join(timeout=5)
+                self.logger.error(f"Nmap timed out after {timeout_secs}s")
+                return False
+            if time.time() - last_heartbeat >= 10:
+                self._emit("log", {"level": "info", "message": f"Nmap running… ({elapsed:.0f}s elapsed)"})
+                last_heartbeat = time.time()
+            try:
+                proc.wait(timeout=min(10, timeout_secs - elapsed))
+                return True  # process exited
+            except subprocess.TimeoutExpired:
+                continue  # still running, loop again for heartbeat/timeout check
 
     @staticmethod
     def _parse_packet_count(stderr: str) -> int:
