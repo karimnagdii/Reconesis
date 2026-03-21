@@ -262,47 +262,6 @@ class ReconesisEngine:
         self._emit("hosts_found", {"hosts": live_ips})
         return live_ips
 
-    def _run_port_scan(self, live_ips: list) -> list:
-        """Phase 2: port scan with retry. Returns detailed_hosts (empty = all retries failed)."""
-        self._log("PHASE 2: SCOUT MODE — Port Scan & Asset Classification")
-        self._emit("status", {"phase": "assessment"})
-
-        max_retries = 2
-        for attempt in range(1, max_retries + 1):
-            port_scan_cmd = self.agent.generate_strategy({
-                "phase": "port_scan",
-                "live_hosts": live_ips,
-                "previous_findings": self.scan_history
-            })
-            self._log(f"Agent command (attempt {attempt}/{max_retries}): {port_scan_cmd}")
-
-            if not port_scan_cmd:
-                self._log(f"Agent returned no port scan command (attempt {attempt}/{max_retries}).", "warning")
-                if attempt < max_retries:
-                    backoff = 2 ** (attempt - 1)
-                    self._log(f"Retrying in {backoff} seconds...")
-                    time.sleep(backoff)
-                continue
-
-            raw_xml, pkts = self.executor.execute(port_scan_cmd)
-            self.metrics["total_packets"] += pkts
-
-            if not raw_xml:
-                self._log(f"Port scan produced no output (attempt {attempt}/{max_retries}).", "warning")
-                if attempt < max_retries:
-                    backoff = 2 ** (attempt - 1)
-                    self._log(f"Retrying in {backoff} seconds...")
-                    time.sleep(backoff)
-                continue
-
-            detailed_hosts = self.parser.parse(raw_xml)
-            self._log(f"Phase 2 succeeded on attempt {attempt}")
-            return detailed_hosts
-
-        self._log("Phase 2 port scan FAILED after all retries. Skipping to Phase 4 with partial data.", "warning")
-        self._log("⚠️ Results are INCOMPLETE — Phase 2 and Phase 3 were skipped due to port scan failure.")
-        return []
-
     def _classify_hosts(self, detailed_hosts: list) -> tuple:
         """
         Hybrid classification: static scoring extracts evidence, one LLM call
@@ -359,37 +318,6 @@ class ReconesisEngine:
         self.metrics["total_hosts"] = len(detailed_hosts)
         self.metrics["critical_hosts"] = len(critical_targets)
         return classified, critical_targets
-
-    def _run_hunter(self, critical_targets: list) -> bool:
-        """Phase 3: deep scan on critical assets. Merges richer port data into self._all_hosts in place.
-        Returns False if no hunter command was generated (caller should break the OODA loop)."""
-        self._log(f"PHASE 3: HUNTER MODE — Deep scan on {len(critical_targets)} critical assets")
-        self._emit("status", {"phase": "hunter", "targets": critical_targets})
-
-        hunter_cmd = self.agent.generate_strategy({
-            "phase": "hunter",
-            "critical_targets": critical_targets,
-            "previous_findings": self.scan_history
-        })
-        self._log(f"Agent command: {hunter_cmd}")
-
-        if not hunter_cmd:
-            self._log("Agent returned no hunter command — stopping loop.", "warning")
-            return False
-
-        hunter_xml, pkts = self.executor.execute(hunter_cmd, inject_vulners=True)
-        self.metrics["total_packets"] += pkts
-        if hunter_xml:
-            hunter_hosts = self.parser.parse(hunter_xml)
-            for host in hunter_hosts:
-                if self._merge_host(host):
-                    self._emit("host_enriched", {
-                        "ip": host["target"],
-                        "ports": self._host_map[host["target"]]["ports"]
-                    })
-        else:
-            self._log("Hunter scan produced no output.", "warning")
-        return True
 
     def _run_cve_enrichment(self) -> None:
         """CVE enrichment pass. Reassigns self._all_hosts (enrich functions return new lists)."""
@@ -558,91 +486,6 @@ class ReconesisEngine:
             "scan_history": self.scan_history,
         }
         self._mini_loop(context, inject_vulners=True)
-
-    def _ooda_step(self, depth: int, prev_hash: str) -> tuple:
-        """Execute one full Observe-Orient-Decide-Act iteration.
-
-        Observe: re-scans all known hosts for deeper port/service data and merges results.
-        Orient: classifies hosts, runs Hunter Mode on CRITICAL/HIGH targets, computes gaps.
-        Decide: calls GroqAgent.decide() to pick the next command; falls back to
-                generate_strategy() on parse failure.
-        Act: executes the chosen command and seeds any LLM-suggested new targets as stubs.
-
-        Args:
-            depth: Current loop depth (1-indexed), used only for the depth-1 special case.
-            prev_hash: SHA-256 TOON hash from the previous iteration for saturation detection.
-
-        Returns:
-            Tuple of (termination_reason, new_hash). termination_reason is a non-empty string
-            when start_scan() should stop the loop (e.g. "no_gaps", "hash_saturation",
-            "llm_complete"), or None to signal that scanning should continue.
-        """
-        # Observe
-        new_hosts = self._run_port_scan(list(self._host_map.keys()))
-        if not new_hosts and depth == 1:
-            return "no_hosts_depth1", prev_hash
-        for h in (new_hosts or []):
-            self._merge_host(h)
-
-        # Orient
-        classified, critical_targets = self._classify_hosts(list(self._host_map.values()))
-        self._update_scan_history(depth, classified)
-
-        if critical_targets:
-            if not self._run_hunter(critical_targets):
-                return "no_hunter_command", prev_hash
-
-        gap_report = self._compute_gaps()
-        if not gap_report:
-            self._log("No gaps remaining — termination criteria met.")
-            return "no_gaps", prev_hash
-
-        # Decide
-        try:
-            decision = self.agent.decide(list(self._host_map.values()), gap_report, self.scan_history)
-        except ReconesisAPIError as e:
-            self._log(f"API error in decide phase (reason=api_error): {e}", "warning")
-            return "api_error", prev_hash
-        except ReconesisParseError:
-            # Fallback: ask generate_strategy for a command
-            self._log("decide() parse failure — falling back to generate_strategy()", "warning")
-            try:
-                fallback_cmd = self.agent.generate_strategy({
-                    "phase": "port_scan",
-                    "live_hosts": list(self._host_map.keys()),
-                    "previous_findings": self.scan_history
-                })
-                decision = {"command": fallback_cmd, "continue": True, "new_targets": []}
-            except ReconesisAPIError as e:
-                self._log(f"Fallback generate_strategy also failed (reason=strategy_fallback_failed): {e}", "warning")
-                return "strategy_fallback_failed", prev_hash
-
-        # Act
-        self._execute_and_merge(decision["command"])
-
-        # Seed any LLM-suggested new targets as stubs so they appear in
-        # the next depth's port-scan target list via self._host_map.keys().
-        new_targets = [t for t in decision.get("new_targets", []) if t not in self._host_map]
-        for t in new_targets:
-            self._host_map[t] = {
-                "target": t, "status": "up",
-                "os": {"name": "unknown", "accuracy": 0},
-                "ports": [], "criticality": "UNKNOWN", "type": "Unknown",
-            }
-        if new_targets:
-            self._log(f"LLM suggested {len(new_targets)} new target(s): {new_targets}")
-
-        # Termination checks
-        if not decision.get("continue", True):
-            self._log("LLM decided scan is complete.")
-            return "llm_complete", prev_hash
-
-        new_hash = self.parser.compute_hash(list(self._host_map.values()))
-        if new_hash == prev_hash:
-            self._log("Hash saturation detected — no new information.")
-            return "hash_saturation", new_hash
-
-        return None, new_hash
 
     def start_scan(self, target: str):
         self.metrics["start_time"] = time.time()
