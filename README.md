@@ -32,7 +32,7 @@ Unlike static scripts that generate noise and alert fatigue, Reconesis contextua
 - **Context-Aware Prompt Switching** — Automatically transitions from fast "Scout Mode" sweeps (Phase 1–2) into targeted "Hunter Mode" (Phase 3) using asset-specific prompts with NSE vulnerability scripts (`vulners`, `smtp-open-relay`, `ldap-search`, etc.).
 - **Non-Blocking Execution with SSE Heartbeats** — Nmap runs via `Popen` with live stdout polling and drain threads. The dashboard receives real-time heartbeat events while long scans are in progress, preventing pipe-buffer deadlocks.
 - **Real-Time Web Dashboard** — Flask + Server-Sent Events interface showing phase transitions, live host cards, scan logs, and performance metrics (packets sent, CVEs found, time-to-insight).
-- **Adaptive Termination** — Three exit conditions prevent infinite loops: depth exhaustion (`MAX_DEPTH=3`), hash saturation (identical TOON across iterations), and criticality fulfilment (no CRITICAL/HIGH hosts remain).
+- **Adaptive Termination** — Three exit conditions prevent infinite loops: depth exhaustion (`MAX_SUB_ITERATIONS=5`), hash saturation (identical TOON across iterations), and criticality fulfilment (no CRITICAL/HIGH hosts remain).
 - **CVE Enrichment** — Deduplicating CVE lookup engine that queries `cve.circl.lu` once per unique product and applies results to all matching hosts.
 
 ---
@@ -185,7 +185,7 @@ All settings are in `src/utils/config.py`, loaded from `.env`.
 | `GROQ_API_KEY` | — | **Required.** Groq API key |
 | `GROQ_MODEL` | `llama-3.3-70b-versatile` | Model to use |
 | `GROQ_API_URL` | Groq OpenAI-compat endpoint | Override API base URL |
-| `MAX_DEPTH` | `3` | Max OODA iterations before forced exit |
+| `MAX_SUB_ITERATIONS` | `5` | Hard cap on mini-loop passes per depth |
 | `DEFAULT_TIMEOUT` | `300` | Timeout in seconds (note: executor timeout is hardcoded separately in `executor.py`) |
 
 ---
