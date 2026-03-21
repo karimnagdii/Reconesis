@@ -361,7 +361,7 @@ class GroqAgent:
                 max_tokens=4096,
                 temperature=0,
             )
-            if not result or finish_reason == "error":
+            if not result:
                 self.logger.warning("classify_hosts: empty or error response from Groq")
                 return []
             return json.loads(result)
@@ -394,14 +394,14 @@ class GroqAgent:
                 self._REPORT_SECTION1_SYSTEM, user_prompt, timeout=120, max_tokens=4096,
                 strip_backticks=False
             )
-            if not section1 or reason1 == "error":
+            if not section1:
                 raise ValueError("Section 1 call failed")
 
             section2, reason2 = self._query_groq(
                 self._REPORT_SECTION2_SYSTEM, user_prompt, timeout=120, max_tokens=4096,
                 strip_backticks=False
             )
-            if not section2 or reason2 == "error":
+            if not section2:
                 raise ValueError("Section 2 call failed")
 
             return section1 + "\n\n---\n\n" + section2
@@ -580,5 +580,5 @@ class GroqAgent:
             decision.setdefault("new_targets", [])
             decision.setdefault("continue", True)
             return decision
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, ValueError) as e:
             raise ReconesisParseError(f"decide: failed to parse JSON response: {e}") from e
