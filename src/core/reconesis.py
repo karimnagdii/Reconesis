@@ -553,10 +553,10 @@ class ReconesisEngine:
                 }
 
         prev_hash = ""
-        while depth < Config.MAX_DEPTH:
+        while depth < Config.MAX_SUB_ITERATIONS:
             depth += 1
             self.metrics["depth"] = depth
-            self._log(f"--- Depth Level {depth}/{Config.MAX_DEPTH} ---")
+            self._log(f"--- Depth Level {depth}/{Config.MAX_SUB_ITERATIONS} ---")
 
             reason, prev_hash = self._ooda_step(depth, prev_hash)
 

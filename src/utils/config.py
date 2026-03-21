@@ -15,7 +15,7 @@ class Config:
 
     # Scanning Settings
     DEFAULT_TIMEOUT = 300   # 5 minutes per scan
-    MAX_DEPTH = 3           # Proposal §4.3.4: max recursion depth before termination
+    MAX_SUB_ITERATIONS = 5  # hard cap on mini-loop passes per depth
 
     # Criticality Thresholds
     # Ports that trigger classification as high-value assets (proposal §4.3.2)
