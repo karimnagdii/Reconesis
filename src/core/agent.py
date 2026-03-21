@@ -310,11 +310,13 @@ class GroqAgent:
         "Do NOT repeat the executive summary or asset inventory table."
     )
 
-    def __init__(self):
+    def __init__(self, event_callback=None):
         self.logger = logging.getLogger("GroqAgent")
         self.api_url = Config.GROQ_API_URL
         self.api_key = Config.GROQ_API_KEY
         self.model = Config.GROQ_MODEL
+        self._emit = event_callback or (lambda t, d: None)
+        self._call_id = 1
         # PERF: connection reuse — eliminates per-call TCP+TLS handshake (M-5)
         self._session = requests.Session()
 
