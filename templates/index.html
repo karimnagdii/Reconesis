@@ -684,6 +684,44 @@
     ::-webkit-scrollbar-thumb:hover {
       background: var(--muted);
     }
+
+    .debug-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: .85rem 1rem;
+      font-family: var(--mono);
+      font-size: .8rem;
+      flex-shrink: 0;
+    }
+    .debug-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: .5rem;
+      font-size: .75rem;
+      color: var(--text-dim);
+    }
+    .debug-card-header strong { color: var(--text); font-size: .82rem; }
+    .debug-card pre {
+      margin: .4rem 0 0;
+      white-space: pre-wrap;
+      word-break: break-all;
+      background: var(--bg);
+      border-radius: 4px;
+      padding: .5rem;
+      font-size: .75rem;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    .debug-card details summary {
+      cursor: pointer;
+      color: var(--text-dim);
+      font-size: .75rem;
+      margin-top: .4rem;
+      user-select: none;
+    }
+    .debug-card details[open] summary { color: var(--text); margin-bottom: .3rem; }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
@@ -805,6 +843,9 @@
         <button class="tab" id="tab-report" onclick="switchTab('report')">
           📄 AI Report
         </button>
+        <button class="tab" id="tab-debug" onclick="switchTab('debug')">
+          🐛 Debug <span class="tab-badge" id="debug-count">0</span>
+        </button>
       </div>
 
       <!-- Hosts Panel -->
@@ -849,6 +890,19 @@
           </div>
         </div>
         <div id="report-content" style="display:none"></div>
+      </div>
+
+      <!-- Debug Panel -->
+      <div class="tab-panel" id="panel-debug" style="position:relative;overflow:hidden;">
+        <div id="debug-feed" style="height:100%;overflow-y:auto;padding:1rem;display:flex;flex-direction:column;gap:.75rem;">
+          <div id="debug-empty" style="color:var(--muted);font-size:.85rem;text-align:center;padding:2rem;">
+            Debug events will appear here when a scan is running.
+          </div>
+        </div>
+        <button id="debug-scroll-btn"
+          style="display:none;position:absolute;bottom:1rem;right:1.5rem;background:var(--surface);border:1px solid var(--border);color:var(--text-dim);border-radius:6px;padding:.4rem .8rem;cursor:pointer;font-size:.8rem;">
+          scroll to bottom
+        </button>
       </div>
 
     </div>
@@ -1078,6 +1132,13 @@
           stopStream();
           showToast('✅ Scan complete!');
           break;
+
+        case 'ai_prompt':
+        case 'ai_response':
+        case 'nmap_exec':
+        case 'nmap_result':
+          appendDebugCard(type, data);
+          break;
       }
     }
 
@@ -1109,6 +1170,15 @@
       hostCount = 0; logCount = 0;
       document.getElementById('host-count').textContent = '0';
       document.getElementById('log-count').textContent = '0';
+      debugCount = 0;
+      document.getElementById('debug-count').textContent = '0';
+      const dbgFeed = document.getElementById('debug-feed');
+      while (dbgFeed.firstChild) dbgFeed.removeChild(dbgFeed.firstChild);
+      const emptyMsg = document.createElement('div');
+      emptyMsg.id = 'debug-empty';
+      emptyMsg.style.cssText = 'color:var(--muted);font-size:.85rem;text-align:center;padding:2rem;';
+      emptyMsg.textContent = 'Debug events will appear here when a scan is running.';
+      dbgFeed.appendChild(emptyMsg);
       document.getElementById('log-console').innerHTML = '';
       document.getElementById('report-content').style.display = 'none';
       document.getElementById('report-placeholder').style.display = 'block';
@@ -1166,6 +1236,87 @@
     function escHtml(s) {
       return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
+
+    // ── DEBUG TAB ──────────────────────────────────────────
+    let debugCount = 0;
+    const DEBUG_BORDER = {
+      ai_prompt:   'var(--accent2)',
+      ai_response: 'var(--green)',
+      nmap_exec:   'var(--accent)',
+      nmap_result: 'var(--muted)',
+    };
+
+    function makeEl(tag, attrs, text) {
+      const el = document.createElement(tag);
+      if (attrs) Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
+      if (text !== undefined) el.textContent = text;
+      return el;
+    }
+
+    function makeHeader(label, ts) {
+      const h = makeEl('div', {class: 'debug-card-header'});
+      h.appendChild(makeEl('strong', null, label));
+      h.appendChild(makeEl('span', null, ts));
+      return h;
+    }
+
+    function makePre(content) {
+      return makeEl('pre', null, content);
+    }
+
+    function makeDetails(summary, content) {
+      const details = document.createElement('details');
+      details.appendChild(makeEl('summary', null, summary));
+      details.appendChild(makePre(content));
+      return details;
+    }
+
+    function appendDebugCard(type, data) {
+      const feed = document.getElementById('debug-feed');
+      const empty = document.getElementById('debug-empty');
+      if (empty) empty.remove();
+
+      const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 50;
+      const ts = new Date().toLocaleTimeString();
+      const card = makeEl('div', {class: 'debug-card'});
+      card.style.borderLeft = '4px solid ' + (DEBUG_BORDER[type] || 'var(--muted)');
+
+      if (type === 'ai_prompt') {
+        card.appendChild(makeHeader('[#' + data.call_id + '] AI Prompt \u2014 phase: ' + data.phase, ts));
+        card.appendChild(makeDetails('System Prompt', data.system_prompt));
+        card.appendChild(makeDetails('User Prompt', data.user_prompt));
+      } else if (type === 'ai_response') {
+        card.appendChild(makeHeader('[#' + data.call_id + '] AI Response \u2014 phase: ' + data.phase, ts));
+        const pre = makeEl('pre', {'style': 'max-height:300px;overflow-y:auto'}, data.raw_response);
+        card.appendChild(pre);
+        debugCount++;
+        document.getElementById('debug-count').textContent = String(debugCount);
+      } else if (type === 'nmap_exec') {
+        const badge = data.inject_vulners ? ' [vulners: yes]' : ' [vulners: no]';
+        card.appendChild(makeHeader('[#' + data.cmd_id + '] Nmap Command' + badge, ts));
+        card.appendChild(makePre(data.command));
+      } else if (type === 'nmap_result') {
+        card.appendChild(makeHeader('[#' + data.cmd_id + '] Nmap Result', ts));
+        const line = makeEl('div');
+        line.appendChild(document.createTextNode('packets: ' + data.packets + '  |  exit: '));
+        const exitSpan = makeEl('span', null, data.exit_code === null ? 'exception' : String(data.exit_code));
+        if (data.exit_code !== 0 && data.exit_code !== null) exitSpan.style.color = 'var(--red)';
+        line.appendChild(exitSpan);
+        line.appendChild(document.createTextNode('  |  output: ' + (data.had_output ? 'yes' : 'no')));
+        card.appendChild(line);
+      }
+
+      feed.appendChild(card);
+      if (atBottom) feed.scrollTo({top: feed.scrollHeight, behavior: 'smooth'});
+    }
+
+    document.getElementById('debug-scroll-btn').onclick = function() {
+      document.getElementById('debug-feed').scrollTo({top: 99999, behavior: 'smooth'});
+    };
+    document.getElementById('debug-feed').addEventListener('scroll', function() {
+      const btn = document.getElementById('debug-scroll-btn');
+      btn.style.display = (this.scrollHeight - this.scrollTop - this.clientHeight < 50) ? 'none' : 'block';
+    });
   </script>
 </body>
 
