@@ -48,8 +48,9 @@ class ToonDialect:
         """Unified port-to-string renderer.
 
         Flags:
-          include_auth:     prefix port with u: for udp, append * for auth_required
-          include_protocol: same as include_auth — both must be True/False together
+          include_auth:     append * after the port number when auth_required is True
+          include_protocol: prefix port with u: when protocol is "udp"
+                            (independent of include_auth — each flag controls only its own marker)
           include_gaps:     render ? for unknown version, ! for missing scripts
                             (requires gap_keys set from render_with_gaps caller)
           include_exploits: append [cve:cvss:src ...] exploit field

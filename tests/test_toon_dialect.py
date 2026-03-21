@@ -497,15 +497,24 @@ class TestRenderPort:
             gap_keys={"no_version:22/ssh"}
         )
         assert "?" in result
+        assert "!" not in result
 
     def test_include_gaps_exclamation(self):
         """include_gaps=True with a no_scripts gap key."""
         p = self._port(port=22, service="ssh")
-        result = ToonDialect._render_port(
+        prod_field = ToonDialect._render_port(
             p, include_auth=True, include_protocol=True, include_gaps=True,
             gap_keys={"no_scripts:22/ssh"}
         )
-        assert "!" in result
+        assert "!" in prod_field
+        assert " ?" not in prod_field
+
+    def test_auth_without_protocol(self):
+        """include_auth=True, include_protocol=False — auth marker shown, no u: prefix."""
+        p = self._port(port=53, protocol="udp", auth=True, service="domain")
+        result = ToonDialect._render_port(p, include_auth=True, include_protocol=False)
+        assert "u:" not in result
+        assert "*" in result
 
     def test_include_exploits_present(self):
         """include_exploits=True with an exploit entry."""
