@@ -171,7 +171,7 @@ class ReconesisEngine:
             ]
         })
 
-    def _execute_and_merge(self, command: str):
+    def _execute_and_merge(self, command: str, inject_vulners: bool = False):
         """Execute an Nmap command and merge parsed TOON hosts into _host_map.
 
         Accumulates total_packets into self.metrics and silently skips execution when
@@ -181,11 +181,12 @@ class ReconesisEngine:
         Args:
             command: Prepared Nmap command string from the Decide phase. Empty string
                      is treated as a no-op with a warning log.
+            inject_vulners: Optional flag to inject vulners NSE script (default: False).
         """
         if not command:
             self._log("Act phase received empty command — skipping.", "warning")
             return
-        raw_xml, pkts = self.executor.execute(command)
+        raw_xml, pkts = self.executor.execute(command, inject_vulners=inject_vulners)
         self.metrics["total_packets"] += pkts
         if not raw_xml:
             self._log("Act phase scan produced no output.", "warning")
