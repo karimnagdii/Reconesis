@@ -54,7 +54,6 @@ class ReconesisEngine:
         """
         self.logger = logging.getLogger("ReconesisEngine")
         self.parser = TOONParser()
-        self.agent = GroqAgent()
         self.assessor = CriticalityAssessor()
         self.exploit_lookup = ExploitLookup()
         self.scan_history = []
@@ -63,7 +62,8 @@ class ReconesisEngine:
         # Dashboard event stream hook
         self._emit = event_callback if event_callback else lambda t, d: None
 
-        # Executor constructed AFTER self._emit so it can receive the callback
+        # Agent and Executor constructed AFTER self._emit so they can receive the callback
+        self.agent = GroqAgent(event_callback=self._emit)
         self.executor = NmapExecutor(event_callback=self._emit)
 
         # Evaluation metrics (proposal §5)
