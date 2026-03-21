@@ -97,3 +97,13 @@ def test_bundle_signals_from_assess_reasons(assessor):
     assessment = assessor.assess(host)
     bundle = assessor.build_evidence_bundle(host, assessment)
     assert bundle["static"]["signals"] == assessment["reasons"]
+
+def test_assess_signals_consistent_across_calls(assessor):
+    """Regression: signal sets must be consistent regardless of call count.
+    Guards against future regressions where signals move inside the category loop."""
+    host = _make_host(ports=[{"port": 3306, "service": "mysql", "product": "MySQL", "version": "8.0"}])
+    result1 = assessor.assess(host)
+    result2 = assessor.assess(host)
+    assert result1["type"] == result2["type"]
+    assert result1["level"] == result2["level"]
+    assert result1["scores"] == result2["scores"]
