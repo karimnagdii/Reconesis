@@ -459,3 +459,77 @@ class TestRenderWithGaps:
         hosts = [_gapped_host("10.0.0.1"), _gapped_host("10.0.0.2")]
         result = ToonDialect.render_with_gaps(hosts, {})
         assert "\n\n" in result
+
+
+# ── _render_port ─────────────────────────────────────────────────────────────
+
+class TestRenderPort:
+    """Tests for ToonDialect._render_port flag combinations."""
+
+    def _port(self, port=80, protocol="tcp", auth=False, service="http",
+               product="", version="", exploits=None):
+        p = {"port": port, "protocol": protocol, "auth_required": auth,
+             "service": service, "product": product, "version": version}
+        if exploits is not None:
+            p["exploits"] = exploits
+        return p
+
+    def test_report_baseline(self):
+        """include_auth=True, include_protocol=True — basic port line."""
+        p = self._port(port=80, service="http", product="nginx", version="1.18")
+        result = ToonDialect._render_port(p, include_auth=True, include_protocol=True)
+        assert result == "80 http nginx/1.18"
+
+    def test_classify_baseline(self):
+        """include_auth=False, include_protocol=False — no auth marker, no u: prefix."""
+        p = self._port(port=53, protocol="udp", auth=True, service="domain")
+        result = ToonDialect._render_port(p, include_auth=False, include_protocol=False)
+        # No u: prefix, no * auth marker
+        assert "u:" not in result
+        assert "*" not in result
+        assert "53" in result
+
+    def test_include_gaps_question_mark(self):
+        """include_gaps=True with a no_version gap key."""
+        p = self._port(port=22, service="ssh")
+        result = ToonDialect._render_port(
+            p, include_auth=True, include_protocol=True, include_gaps=True,
+            gap_keys={"no_version:22/ssh"}
+        )
+        assert "?" in result
+
+    def test_include_gaps_exclamation(self):
+        """include_gaps=True with a no_scripts gap key."""
+        p = self._port(port=22, service="ssh")
+        result = ToonDialect._render_port(
+            p, include_auth=True, include_protocol=True, include_gaps=True,
+            gap_keys={"no_scripts:22/ssh"}
+        )
+        assert "!" in result
+
+    def test_include_exploits_present(self):
+        """include_exploits=True with an exploit entry."""
+        exploit = {"cve": "CVE-2021-12345", "cvss": 9.8, "source": "nvd"}
+        p = self._port(port=443, service="https", exploits=[exploit])
+        result = ToonDialect._render_port(
+            p, include_auth=True, include_protocol=True, include_exploits=True
+        )
+        assert "2021-12345" in result
+        assert "9.8" in result
+        assert ":n]" in result  # nvd source code
+
+    def test_include_exploits_absent(self):
+        """include_exploits=True but no exploits — no [] suffix."""
+        p = self._port(port=443, service="https", exploits=[])
+        result = ToonDialect._render_port(
+            p, include_auth=True, include_protocol=True, include_exploits=True
+        )
+        assert "[" not in result
+
+    def test_exploits_requires_protocol_invariant(self):
+        """include_exploits=True with include_protocol=False must raise AssertionError."""
+        p = self._port()
+        with pytest.raises(AssertionError):
+            ToonDialect._render_port(
+                p, include_auth=False, include_protocol=False, include_exploits=True
+            )
