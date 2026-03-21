@@ -200,6 +200,12 @@ class NmapExecutor:
         except subprocess.TimeoutExpired:
             # Not reachable: timeout is enforced inside _wait_with_timeout via proc.kill().
             self.logger.error("Nmap scan timed out after 300 seconds.")
+            self._emit("nmap_result", {
+                "cmd_id": current_cmd_id,
+                "packets": 0,
+                "exit_code": -1,
+                "had_output": False,
+            })
             return None, 0
         except Exception as e:
             self.logger.error(f"Execution failed: {e}")

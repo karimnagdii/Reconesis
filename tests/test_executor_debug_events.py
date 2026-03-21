@@ -49,6 +49,7 @@ def test_nmap_result_emitted_after_subprocess(executor_with_events):
     assert result_events[0][1]["cmd_id"] == 1
     assert result_events[0][1]["had_output"] is True
     assert result_events[0][1]["exit_code"] == 0
+    assert result_events[0][1]["packets"] == 0
 
 
 def test_exec_and_result_share_cmd_id(executor_with_events):
@@ -87,6 +88,7 @@ def test_nmap_result_had_output_false_on_empty_stdout(executor_with_events):
     result_events = [e for e in events if e[0] == "nmap_result"]
     assert result_events[0][1]["had_output"] is False
     assert result_events[0][1]["exit_code"] == 0
+    assert result_events[0][1]["packets"] == 0
 
 
 def test_inject_vulners_flag_in_nmap_exec_event(executor_with_events):
@@ -96,3 +98,16 @@ def test_inject_vulners_flag_in_nmap_exec_event(executor_with_events):
         ex.execute("nmap -sV 10.0.0.1 -T4", inject_vulners=True)
     exec_events = [e for e in events if e[0] == "nmap_exec"]
     assert exec_events[0][1]["inject_vulners"] is True
+
+
+def test_nmap_result_emitted_on_timeout(executor_with_events):
+    ex, events = executor_with_events
+    proc = _make_proc()
+    with patch("subprocess.Popen", return_value=proc):
+        with patch.object(ex, "_wait_with_timeout", return_value=False):
+            ex.execute("nmap -sS 10.0.0.1 -T4")
+    result_events = [e for e in events if e[0] == "nmap_result"]
+    assert len(result_events) == 1
+    assert result_events[0][1]["exit_code"] == -1
+    assert result_events[0][1]["had_output"] is False
+    assert result_events[0][1]["packets"] == 0
