@@ -9,6 +9,39 @@ import platform
 import threading
 from typing import Optional, Tuple
 
+# Allowlist of NSE scripts known to exist in standard nmap installations.
+# Scripts not in this set are stripped before execution to prevent the NSE
+# engine from rejecting the entire command (exit 1, no output).
+_VALID_NSE_SCRIPTS = frozenset({
+    "banner",
+    "cassandra-info",
+    "dns-brute", "dns-nsid", "dns-recursion", "dns-service-discovery", "dns-zone-transfer",
+    "ftp-anon", "ftp-bounce", "ftp-syst",
+    "http-auth-finder", "http-default-accounts", "http-enum", "http-headers",
+    "http-methods", "http-robots.txt", "http-server-header", "http-title",
+    "imap-capabilities",
+    "krb5-enum-users",
+    "ldap-rootdse", "ldap-search",
+    "mongodb-databases", "mongodb-info",
+    "ms-sql-empty-password", "ms-sql-info",
+    "msrpc-enum",
+    "mysql-databases", "mysql-empty-password", "mysql-info",
+    "nfs-showmount",
+    "pop3-capabilities",
+    "rdp-enum-encryption", "rdp-ntlm-info", "rdp-vuln-ms12-020",
+    "redis-info",
+    "rpcinfo",
+    "rtsp-headers",
+    "smb-enum-shares", "smb-enum-users", "smb-os-discovery",
+    "smb-protocols", "smb-security-mode", "smb-vuln-ms17-010", "smb2-security-mode",
+    "smtp-commands", "smtp-ntlm-info", "smtp-open-relay",
+    "snmp-info", "snmp-interfaces", "snmp-sysdescr",
+    "ssh-auth-methods", "ssh-hostkey", "ssh2-enum-algos",
+    "ssl-cert", "ssl-enum-ciphers",
+    "vnc-info",
+    "vulners",
+})
+
 
 class NmapExecutor:
     def __init__(self, event_callback=None):
@@ -214,6 +247,42 @@ class NmapExecutor:
         if "-p-" in command:
             command = command.replace("-p-", "").strip()
             self.logger.warning("Stripped '-p-' (full port scan) — falls back to nmap default 1000 ports.")
+
+        # Strip file-output flags — we always force -oX - for XML to stdout.
+        for out_flag in ("-oA", "-oN", "-oG", "-oS"):
+            if out_flag in command:
+                command = re.sub(rf'{re.escape(out_flag)}\s+\S+', '', command).strip()
+                self.logger.warning(f"Stripped '{out_flag}' output flag — use -oX - only.")
+        command = re.sub(r'\s+', ' ', command).strip()
+
+        # Multiple -p flags — nmap only accepts one; keep the first, drop the rest.
+        p_flags = re.findall(r'-p\s+\S+', command)
+        if len(p_flags) > 1:
+            for extra in p_flags[1:]:
+                command = command.replace(extra, '', 1)
+            command = re.sub(r'\s+', ' ', command).strip()
+            self.logger.warning(
+                f"Multiple -p flags detected — kept first, stripped {len(p_flags) - 1} extra(s)."
+            )
+
+        # Strip NSE scripts not in the known-valid allowlist to prevent nmap
+        # from exiting early with an "NSE engine failed" error (exit 1, no output).
+        if "--script" in command:
+            m = re.search(r'--script[=\s]+([^\s\-][^\s]*)', command)
+            if m:
+                raw = m.group(1).rstrip(',')
+                scripts = [s.strip() for s in raw.split(',') if s.strip()]
+                valid = [s for s in scripts if s in _VALID_NSE_SCRIPTS]
+                invalid = [s for s in scripts if s not in _VALID_NSE_SCRIPTS]
+                if invalid:
+                    self.logger.warning(f"Stripped unknown NSE scripts: {invalid}")
+                if valid:
+                    replacement = ','.join(valid)
+                    command = command[:m.start(1)] + replacement + command[m.start(1) + len(raw):]
+                else:
+                    command = re.sub(r'--script[=\s]+\S+', '', command).strip()
+                    self.logger.warning("All specified NSE scripts were invalid — --script removed.")
+        command = re.sub(r'\s+', ' ', command).strip()
 
         if "-A" in command and re.search(r'\b\d+\.\d+\.\d+\.\d+/\d+\b', command):
             command = command.replace("-A", "").strip()

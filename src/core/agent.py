@@ -575,23 +575,37 @@ class GroqAgent:
                 body = e.response.text[:500]
                 self.logger.error(f"Response body: {body}")
                 if status_code == 429:
-                    # Parse suggested wait time from error body (e.g. "try again in 26.6s")
-                    match = re.search(r"try again in (\d+\.?\d*)s", body)
-                    wait = float(match.group(1)) + 1 if match else 30
-                    self.logger.warning(f"Rate limited — waiting {wait:.1f}s then retrying once")
-                    time.sleep(wait)
-                    try:
-                        response = self._session.post(self.api_url, headers=headers, json=payload, timeout=timeout)
-                        response.raise_for_status()
-                        data = response.json()
-                        choice = data["choices"][0]
-                        result = choice["message"]["content"].strip()
-                        if strip_backticks:
-                            result = result.replace("```", "").replace("`", "").strip()
-                        return result, choice.get("finish_reason", "stop")
-                    except Exception as retry_err:
-                        self.logger.error(f"Retry after rate limit also failed: {retry_err}")
-                        raise ReconesisAPIError(f"Retry after rate limit also failed: {retry_err}") from retry_err
+                    # Retry up to 3 times, each time waiting the server-suggested delay.
+                    last_exc = e
+                    for attempt in range(1, 4):
+                        match = re.search(r"try again in (\d+\.?\d*)s",
+                                          last_exc.response.text if last_exc.response else "")
+                        wait = float(match.group(1)) + 1 if match else min(30, 5 * attempt)
+                        self.logger.warning(
+                            f"Rate limited — waiting {wait:.1f}s (attempt {attempt}/3)"
+                        )
+                        time.sleep(wait)
+                        try:
+                            response = self._session.post(
+                                self.api_url, headers=headers, json=payload, timeout=timeout
+                            )
+                            response.raise_for_status()
+                            data = response.json()
+                            choice = data["choices"][0]
+                            result = choice["message"]["content"].strip()
+                            if strip_backticks:
+                                result = result.replace("```", "").replace("`", "").strip()
+                            return result, choice.get("finish_reason", "stop")
+                        except requests.exceptions.HTTPError as retry_e:
+                            if retry_e.response is not None and retry_e.response.status_code == 429:
+                                last_exc = retry_e
+                                continue
+                            raise ReconesisAPIError(
+                                f"API error after rate-limit retry: {retry_e}"
+                            ) from retry_e
+                    raise ReconesisAPIError(
+                        f"Rate limit persisted after 3 retries"
+                    ) from last_exc
                 if status_code == 401:
                     self.logger.error("API authentication failed — check your GROQ_API_KEY")
             raise ReconesisAPIError(f"Groq API HTTP error ({status_code}): {e}") from e

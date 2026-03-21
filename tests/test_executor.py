@@ -68,6 +68,30 @@ class TestSanitizeCommand:
         result = executor._sanitize_command(cmd)
         assert "-A" in result
 
+    def test_output_flags_stripped(self, executor):
+        cmd = "nmap -sS -oA scan_results 192.168.1.0/24"
+        result = executor._sanitize_command(cmd)
+        assert "-oA" not in result
+        assert "scan_results" not in result
+
+    def test_multiple_p_flags_keeps_first(self, executor):
+        cmd = "nmap -sS -p T:22,80,443 -p U:53,161 192.168.1.0/24"
+        result = executor._sanitize_command(cmd)
+        assert result.count("-p ") == 1
+        assert "T:22,80,443" in result
+        assert "U:53,161" not in result
+
+    def test_unknown_nse_scripts_stripped(self, executor):
+        cmd = "nmap -sV --script pgsql-info,http-title 192.168.1.1"
+        result = executor._sanitize_command(cmd)
+        assert "pgsql-info" not in result
+        assert "http-title" in result   # valid script kept
+
+    def test_all_invalid_nse_scripts_removes_flag(self, executor):
+        cmd = "nmap -sV --script pgsql-info,pgsql-version 192.168.1.1"
+        result = executor._sanitize_command(cmd)
+        assert "--script" not in result
+
     def test_t4_appended_when_no_timing_flag(self, executor):
         cmd = "nmap -sS 192.168.1.0/24"
         result = executor._sanitize_command(cmd)
