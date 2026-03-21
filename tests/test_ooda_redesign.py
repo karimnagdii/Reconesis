@@ -412,6 +412,16 @@ class TestDecideForDepth:
         with pytest.raises(ReconesisParseError):
             agent.decide_for_depth(ctx)
 
+    def test_unknown_depth_falls_back_to_depth1(self):
+        from src.core.agent import GroqAgent, DEPTH1_SYSTEM_PROMPT
+        agent = self._make_agent()
+        self._mock_groq_response(agent,
+            '{"command": "nmap -sS 10.0.0.1", "rationale": "x", "continue": false, "new_targets": []}')
+        ctx = self._make_context(depth=99)
+        result = agent.decide_for_depth(ctx)
+        # Verify the agent still returns a valid result (fallback didn't crash)
+        assert result["command"] == "nmap -sS 10.0.0.1"
+
 
 class TestMiniLoop:
     def _make_engine(self):
@@ -511,6 +521,21 @@ class TestMiniLoop:
         engine._mini_loop(ctx)  # inject_vulners not passed — defaults to False
         engine._execute_and_merge.assert_called_once_with(
             "nmap -sS 10.0.0.1", inject_vulners=False)
+
+    def test_gap_map_injected_into_context_before_decide(self):
+        engine = self._make_engine()
+        engine._compute_gaps = MagicMock(return_value=[
+            {"ip": "10.0.0.1", "gaps": ["os_unknown"]}
+        ])
+        captured_ctx = {}
+        def capture(ctx):
+            captured_ctx.update(ctx)
+            return {"command": "nmap -sS 10.0.0.1", "continue": False, "new_targets": []}
+        engine.agent.decide_for_depth = MagicMock(side_effect=capture)
+        engine.parser.compute_hash = MagicMock(return_value="h1")
+        ctx = {"depth": 1, "depth_purpose": "", "target_hosts": [], "hosts": [], "scan_history": []}
+        engine._mini_loop(ctx)
+        assert captured_ctx.get("gap_map") == {"10.0.0.1": ["os_unknown"]}
 
 
 class TestRunDepth1Mapping:

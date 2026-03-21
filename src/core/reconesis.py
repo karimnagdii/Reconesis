@@ -423,6 +423,10 @@ class ReconesisEngine:
 
             self._execute_and_merge(decision["command"], inject_vulners=inject_vulners)
 
+            # Hash is computed before stub seeding so new_targets additions don't
+            # artificially advance the hash and prevent saturation detection.
+            new_hash = self.parser.compute_hash(list(self._host_map.values()))
+
             new_targets = [t for t in decision.get("new_targets", []) if t not in self._host_map]
             for t in new_targets:
                 self._host_map[t] = {
@@ -437,7 +441,6 @@ class ReconesisEngine:
                 self._log(f"Depth {context['depth']}: LLM signalled complete.")
                 break
 
-            new_hash = self.parser.compute_hash(list(self._host_map.values()))
             if new_hash == prev_hash:
                 self._log(f"Depth {context['depth']}: hash saturation — no new information.")
                 break
