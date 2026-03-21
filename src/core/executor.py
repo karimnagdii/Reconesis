@@ -48,6 +48,7 @@ class NmapExecutor:
         self.logger = logging.getLogger("NmapExecutor")
         self.nmap_path = self._find_nmap()
         self._emit = event_callback or (lambda t, d: None)
+        self._cmd_id = 1
 
     def _prepare_command(self, command: str, inject_vulners: bool) -> str:
         """Sanitize, validate, and augment a raw LLM-generated Nmap command string.
@@ -116,6 +117,14 @@ class NmapExecutor:
         if not command:
             return None, 0
 
+        current_cmd_id = self._cmd_id
+        self._cmd_id += 1
+        self._emit("nmap_exec", {
+            "cmd_id": current_cmd_id,
+            "command": command,
+            "inject_vulners": inject_vulners,
+        })
+
         self.logger.info(f"Executing: {command}")
         try:
             proc = subprocess.Popen(
@@ -145,6 +154,12 @@ class NmapExecutor:
 
             completed = self._wait_with_timeout(proc, 300, stdout_thread, stderr_thread)
             if not completed:
+                self._emit("nmap_result", {
+                    "cmd_id": current_cmd_id,
+                    "packets": 0,
+                    "exit_code": -1,
+                    "had_output": False,
+                })
                 return None, 0
 
             # Threads are already joined inside _wait_with_timeout if it timed out.
@@ -159,6 +174,12 @@ class NmapExecutor:
 
             if not stdout or not stdout.strip():
                 self.logger.error(f"Nmap produced no output. Stderr: {stderr}")
+                self._emit("nmap_result", {
+                    "cmd_id": current_cmd_id,
+                    "packets": packets,
+                    "exit_code": proc.returncode,
+                    "had_output": False,
+                })
                 return None, packets
 
             # Intentional: non-zero exit is logged but not treated as failure.
@@ -168,6 +189,12 @@ class NmapExecutor:
                 self.logger.warning(f"Nmap returned non-zero exit code: {proc.returncode}")
                 self.logger.warning(f"Stderr: {stderr}")
 
+            self._emit("nmap_result", {
+                "cmd_id": current_cmd_id,
+                "packets": packets,
+                "exit_code": proc.returncode,
+                "had_output": True,
+            })
             return stdout, packets
 
         except subprocess.TimeoutExpired:
@@ -176,6 +203,12 @@ class NmapExecutor:
             return None, 0
         except Exception as e:
             self.logger.error(f"Execution failed: {e}")
+            self._emit("nmap_result", {
+                "cmd_id": current_cmd_id,
+                "packets": 0,
+                "exit_code": None,
+                "had_output": False,
+            })
             return None, 0
 
     def _wait_with_timeout(
