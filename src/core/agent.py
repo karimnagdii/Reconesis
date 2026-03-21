@@ -79,6 +79,72 @@ DECIDE_SYSTEM_PROMPT = (
 )
 
 
+DEPTH1_SYSTEM_PROMPT = (
+    _DIALECT_RING
+    + "You are the network mapping module of Reconesis. "
+    "Your goal is to build a complete picture of the network across multiple scan iterations. "
+    "Discover all device roles, identify additional subnets, detect firewall presence, "
+    "and map the full attack surface. Vary your port sets and scan techniques between "
+    "sub-iterations to reveal hosts that earlier scans missed. "
+    "Choose ports that would expose the specific device types you are looking for: "
+    "Routers, Firewalls, IoT Cameras, Active Directory/LDAP, Database Servers, "
+    "Mail Servers, DNS Servers, NAS Appliances, Windows File Servers, Jump Hosts, "
+    "Web Servers, Application Servers. "
+    "Do NOT use -p- or --top-ports. Select explicit port lists with -p.\n\n"
+    "Reply ONLY with valid JSON — no prose, no code fences:\n"
+    '{\n  "command": "<nmap string>",\n'
+    '  "rationale": "<one sentence>",\n'
+    '  "continue": <true|false>,\n'
+    '  "new_targets": ["<ip or cidr>", ...]\n}\n\n'
+    '"continue": false only when you have a complete network picture.\n'
+    '"new_targets": [] if no new scope hints found.'
+)
+
+DEPTH2_SYSTEM_PROMPT = (
+    _DIALECT_RING
+    + "You are the deep fingerprint module of Reconesis. "
+    "You have a classified network map. The hosts provided are confirmed CRITICAL or HIGH assets. "
+    "Go deeper — enumerate exact service versions, identify exposed management interfaces, "
+    "and check for service-specific misconfigurations. "
+    "Choose ports meaningful to each host's classified type. "
+    "Use passive NSE scripts only: mysql-info, ldap-rootdse, smtp-commands, http-title, "
+    "ssh-auth-methods, snmp-info, smb-security-mode, http-enum, ftp-anon, nfs-showmount, "
+    "http-default-accounts, http-auth-finder, dns-zone-transfer, dns-recursion. "
+    "Do NOT use any brute-force scripts (*-brute, *-enum-users).\n\n"
+    "Reply ONLY with valid JSON — no prose, no code fences:\n"
+    '{\n  "command": "<nmap string>",\n'
+    '  "rationale": "<one sentence>",\n'
+    '  "continue": <true|false>,\n'
+    '  "new_targets": ["<ip or cidr>", ...]\n}\n\n'
+    '"continue": false when no further depth-2 enumeration will yield new service data.\n'
+    '"new_targets": [] if no new scope hints found.'
+)
+
+DEPTH3_SYSTEM_PROMPT = (
+    _DIALECT_RING
+    + "You are the vulnerability enumeration module of Reconesis. "
+    "You have deep service fingerprints for each host. "
+    "Now find specific weaknesses — anonymous access, default configurations, "
+    "exposed management consoles, known service vulnerabilities. "
+    "Use targeted passive NSE scripts appropriate to each service type. "
+    "Do NOT use brute-force scripts. "
+    "Do NOT re-scan ports or services already enumerated in previous iterations.\n\n"
+    "Reply ONLY with valid JSON — no prose, no code fences:\n"
+    '{\n  "command": "<nmap string>",\n'
+    '  "rationale": "<one sentence>",\n'
+    '  "continue": <true|false>,\n'
+    '  "new_targets": ["<ip or cidr>", ...]\n}\n\n'
+    '"continue": false when no further vulnerability enumeration is possible.\n'
+    '"new_targets": [] if no new scope hints found.'
+)
+
+_DEPTH_PROMPTS = {
+    1: DEPTH1_SYSTEM_PROMPT,
+    2: DEPTH2_SYSTEM_PROMPT,
+    3: DEPTH3_SYSTEM_PROMPT,
+}
+
+
 class GroqAgent:
     _SYSTEM_PROMPTS = {
         "scout": (
@@ -618,3 +684,55 @@ class GroqAgent:
             return decision
         except (json.JSONDecodeError, ValueError) as e:
             raise ReconesisParseError(f"decide: failed to parse JSON response: {e}") from e
+
+    def decide_for_depth(self, context: dict) -> dict:
+        """Select a scan command for the given depth context.
+
+        Builds a user prompt from the scoped target hosts (via ToonDialect.render_with_gaps),
+        depth purpose string, and cross-depth scan history. Raises ReconesisAPIError on API
+        failure and ReconesisParseError on unparseable response.
+
+        Args:
+            context: dict with keys depth (int), depth_purpose (str), target_hosts (list[dict]),
+                     hosts (list[dict]), scan_history (list), gap_map (dict, pre-computed by
+                     _mini_loop on the engine side).
+
+        Returns:
+            Parsed decision dict with keys: command, rationale, continue, new_targets.
+        """
+        depth = context["depth"]
+        system_prompt = _DEPTH_PROMPTS.get(depth, DEPTH1_SYSTEM_PROMPT)
+
+        target_hosts = context.get("target_hosts", [])
+        gap_map = context.get("gap_map", {})
+        toon_block = ToonDialect.render_with_gaps(target_hosts, gap_map)
+
+        purpose = context.get("depth_purpose", "")
+        history_block = self._build_history_context(context.get("scan_history", []))
+        user_content = f"{purpose}\n\n{toon_block}{history_block}"
+
+        try:
+            result, _ = self._query_groq(
+                system_prompt=system_prompt,
+                user_prompt=user_content,
+                strip_backticks=False,
+            )
+        except (ReconesisAPIError, ReconesisParseError):
+            raise
+        except Exception as e:
+            raise ReconesisAPIError(f"decide_for_depth: unexpected API error: {e}") from e
+        if not result:
+            raise ReconesisParseError("decide_for_depth: empty response from Groq")
+        raw = result.strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```[a-z]*\n?", "", raw)
+            raw = re.sub(r"\n?```$", "", raw)
+        try:
+            decision = json.loads(raw)
+            if "command" not in decision:
+                raise ValueError("Missing 'command' key")
+            decision.setdefault("new_targets", [])
+            decision.setdefault("continue", True)
+            return decision
+        except (json.JSONDecodeError, ValueError) as e:
+            raise ReconesisParseError(f"decide_for_depth: failed to parse JSON: {e}") from e

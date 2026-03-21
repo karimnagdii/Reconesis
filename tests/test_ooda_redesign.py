@@ -569,3 +569,79 @@ class TestComputeGapsAdditional:
         gaps = engine._compute_gaps()
         assert len(gaps) == 1
         assert "os_unknown" in gaps[0]["gaps"]
+
+
+class TestDecideForDepth:
+    def _make_agent(self):
+        with patch("src.core.agent.Config"):
+            agent = GroqAgent.__new__(GroqAgent)
+            agent.logger = MagicMock()
+            agent._session = MagicMock()
+            agent.api_url = "http://fake"
+            agent.api_key = "fake"
+            agent.model = "fake-model"
+            return agent
+
+    def _make_context(self, depth=1):
+        return {
+            "depth": depth,
+            "depth_purpose": "Test purpose",
+            "target_hosts": [],
+            "hosts": [],
+            "scan_history": [],
+        }
+
+    def _mock_groq_response(self, agent, payload):
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {
+            "choices": [{"message": {"content": payload}, "finish_reason": "stop"}]
+        }
+        agent._session.post.return_value = response
+
+    def test_depth1_returns_command(self):
+        from src.core.agent import GroqAgent
+        agent = self._make_agent()
+        self._mock_groq_response(agent,
+            '{"command": "nmap -sS 10.0.0.1", "rationale": "x", "continue": true, "new_targets": []}')
+        ctx = self._make_context(depth=1)
+        result = agent.decide_for_depth(ctx)
+        assert result["command"] == "nmap -sS 10.0.0.1"
+        assert result["continue"] is True
+
+    def test_depth2_returns_command(self):
+        from src.core.agent import GroqAgent
+        agent = self._make_agent()
+        self._mock_groq_response(agent,
+            '{"command": "nmap -sV 10.0.0.2", "rationale": "y", "continue": false, "new_targets": []}')
+        ctx = self._make_context(depth=2)
+        result = agent.decide_for_depth(ctx)
+        assert result["command"] == "nmap -sV 10.0.0.2"
+        assert result["continue"] is False
+
+    def test_depth3_returns_command(self):
+        from src.core.agent import GroqAgent
+        agent = self._make_agent()
+        self._mock_groq_response(agent,
+            '{"command": "nmap -sV --script http-title 10.0.0.3", "rationale": "z", "continue": false, "new_targets": []}')
+        ctx = self._make_context(depth=3)
+        result = agent.decide_for_depth(ctx)
+        assert result["command"] == "nmap -sV --script http-title 10.0.0.3"
+
+    def test_api_error_raises(self):
+        from src.core.agent import GroqAgent
+        from src.utils.exceptions import ReconesisAPIError
+        agent = self._make_agent()
+        agent._session.post.side_effect = Exception("network error")
+        ctx = self._make_context(depth=1)
+        with pytest.raises(ReconesisAPIError):
+            agent.decide_for_depth(ctx)
+
+    def test_parse_error_raises(self):
+        from src.core.agent import GroqAgent
+        from src.utils.exceptions import ReconesisParseError
+        agent = self._make_agent()
+        self._mock_groq_response(agent, "not json at all")
+        ctx = self._make_context(depth=1)
+        with pytest.raises(ReconesisParseError):
+            agent.decide_for_depth(ctx)
