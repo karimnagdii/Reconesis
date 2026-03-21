@@ -650,14 +650,10 @@ class ReconesisEngine:
         self._log(f"🚀 Starting Reconesis on target: {target}")
         self._emit("status", {"phase": "discovery", "target": target})
 
-        depth = 0
-
         live_ips = self._run_discovery(target)
         if not live_ips:
             return
 
-        # Seed _host_map with stub entries for discovered IPs so _ooda_step
-        # has targets to pass to _run_port_scan on depth 1.
         for ip in live_ips:
             if ip not in self._host_map:
                 self._host_map[ip] = {
@@ -666,19 +662,31 @@ class ReconesisEngine:
                     "ports": [], "criticality": "UNKNOWN", "type": "Unknown",
                 }
 
-        prev_hash = ""
-        while depth < Config.MAX_SUB_ITERATIONS:
-            depth += 1
-            self.metrics["depth"] = depth
-            self._log(f"--- Depth Level {depth}/{Config.MAX_SUB_ITERATIONS} ---")
+        # Depth 1: broad network mapping
+        self._run_depth1_mapping(live_ips)
+        self.metrics["depth"] = 1
 
-            reason, prev_hash = self._ooda_step(depth, prev_hash)
+        # Hybrid classification: static scorer evidence + LLM final labels
+        classified, critical_high_hosts = self._classify_hosts(list(self._host_map.values()))
+        for host in classified:
+            ip = host["target"]
+            if ip in self._host_map:
+                self._host_map[ip]["type"] = host["type"]
+                self._host_map[ip]["criticality"] = host["criticality"]
+        self.metrics["total_hosts"] = len(classified)
+        self.metrics["critical_hosts"] = len(critical_high_hosts)
+        self._update_scan_history(1, classified)
 
-            if reason == "no_hosts_depth1":
-                self._generate_report(partial=True)
-                return
-            if reason is not None:
-                break
+        # Depth 2: deep fingerprint (CRITICAL/HIGH only)
+        if critical_high_hosts:
+            self._run_depth2_deep_dive(critical_high_hosts)
+            self.metrics["depth"] = 2
+            self._update_scan_history(2, list(self._host_map.values()))
+
+            # Depth 3: vulnerability enumeration (same targets)
+            self._run_depth3_deepest(critical_high_hosts)
+            self.metrics["depth"] = 3
+            self._update_scan_history(3, list(self._host_map.values()))
 
         self._run_cve_enrichment()
         self._generate_report()
