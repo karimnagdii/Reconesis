@@ -13,6 +13,30 @@ from src.utils.exceptions import ReconesisAPIError, ReconesisParseError
 
 INTERESTING_PORTS = {21, 22, 23, 25, 80, 443, 445, 1433, 3306, 3389, 5432, 6379}
 
+_DEPTH1_PURPOSE = (
+    "Build a complete picture of the network. Discover all device roles, identify "
+    "additional subnets, detect firewall presence, and map the full attack surface. "
+    "Vary port sets and scan techniques across sub-iterations to reveal hosts that "
+    "earlier scans missed. Choose ports that would expose: Routers, Firewalls, "
+    "IoT Cameras, Active Directory/LDAP, Database Servers, Mail Servers, DNS Servers, "
+    "NAS Appliances, Windows File Servers, Jump Hosts, Web Servers, Application Servers. "
+    "Do not use -p- or --top-ports."
+)
+
+_DEPTH2_PURPOSE = (
+    "You have a classified network map. These are confirmed CRITICAL or HIGH assets. "
+    "Go deeper — enumerate exact service versions, identify exposed management interfaces, "
+    "check for service-specific misconfigurations. Choose ports meaningful to each host's "
+    "classified type. Use passive NSE scripts only. No brute-force scripts."
+)
+
+_DEPTH3_PURPOSE = (
+    "You have deep service fingerprints on these high-value targets. Now find specific "
+    "weaknesses — anonymous access, default configurations, exposed management consoles, "
+    "known service vulnerabilities. Use targeted passive NSE scripts. No brute-force. "
+    "Do not re-cover ground already explored in depth 2."
+)
+
 _VALID_TYPES = {
     "Database Server", "Mail Server", "Firewall", "Router",
     "Active Directory / LDAP", "Jump Host", "Web Server", "Application Server",
@@ -493,6 +517,47 @@ class ReconesisEngine:
 
             context["scan_history"] = self.scan_history
             context["hosts"] = list(self._host_map.values())
+
+    def _run_depth1_mapping(self, live_ips: list) -> None:
+        """Depth 1: broad network mapping over all discovered hosts."""
+        self._log("DEPTH 1: Network Mapping — building complete network picture")
+        self._emit("status", {"phase": "depth1_mapping"})
+        context = {
+            "depth": 1,
+            "depth_purpose": _DEPTH1_PURPOSE,
+            "target_hosts": list(self._host_map.values()),
+            "hosts": list(self._host_map.values()),
+            "scan_history": self.scan_history,
+        }
+        self._mini_loop(context, inject_vulners=False)
+
+    def _run_depth2_deep_dive(self, critical_high_hosts: list) -> None:
+        """Depth 2: deep fingerprint on CRITICAL/HIGH hosts only."""
+        self._log(f"DEPTH 2: Deep Fingerprint — {len(critical_high_hosts)} CRITICAL/HIGH assets")
+        self._emit("status", {"phase": "depth2_deep_dive", "targets": critical_high_hosts})
+        target_hosts = [self._host_map[t["ip"]] for t in critical_high_hosts if t["ip"] in self._host_map]
+        context = {
+            "depth": 2,
+            "depth_purpose": _DEPTH2_PURPOSE,
+            "target_hosts": target_hosts,
+            "hosts": list(self._host_map.values()),
+            "scan_history": self.scan_history,
+        }
+        self._mini_loop(context, inject_vulners=True)
+
+    def _run_depth3_deepest(self, critical_high_hosts: list) -> None:
+        """Depth 3: vulnerability enumeration on CRITICAL/HIGH hosts."""
+        self._log(f"DEPTH 3: Vulnerability Enumeration — {len(critical_high_hosts)} targets")
+        self._emit("status", {"phase": "depth3_deepest", "targets": critical_high_hosts})
+        target_hosts = [self._host_map[t["ip"]] for t in critical_high_hosts if t["ip"] in self._host_map]
+        context = {
+            "depth": 3,
+            "depth_purpose": _DEPTH3_PURPOSE,
+            "target_hosts": target_hosts,
+            "hosts": list(self._host_map.values()),
+            "scan_history": self.scan_history,
+        }
+        self._mini_loop(context, inject_vulners=True)
 
     def _ooda_step(self, depth: int, prev_hash: str) -> tuple:
         """Execute one full Observe-Orient-Decide-Act iteration.

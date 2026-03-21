@@ -745,3 +745,90 @@ class TestMiniLoop:
         engine._mini_loop(ctx)  # inject_vulners not passed — defaults to False
         engine._execute_and_merge.assert_called_once_with(
             "nmap -sS 10.0.0.1", inject_vulners=False)
+
+
+class TestRunDepth1Mapping:
+    def _make_engine(self):
+        with patch("src.core.reconesis.NmapExecutor"), \
+             patch("src.core.reconesis.GroqAgent"), \
+             patch("src.core.reconesis.TOONParser"), \
+             patch("src.core.reconesis.CriticalityAssessor"), \
+             patch("src.core.reconesis.ExploitLookup"):
+            engine = ReconesisEngine()
+            engine._mini_loop = MagicMock()
+            return engine
+
+    def test_calls_mini_loop_with_depth1(self):
+        engine = self._make_engine()
+        engine._host_map = {"10.0.0.1": _make_host("10.0.0.1")}
+        engine._run_depth1_mapping(["10.0.0.1"])
+        assert engine._mini_loop.called
+        ctx = engine._mini_loop.call_args[0][0]
+        assert ctx["depth"] == 1
+        assert engine._mini_loop.call_args[1].get("inject_vulners") is False
+
+    def test_passes_all_hosts_as_target_hosts(self):
+        engine = self._make_engine()
+        engine._host_map = {
+            "10.0.0.1": _make_host("10.0.0.1"),
+            "10.0.0.2": _make_host("10.0.0.2"),
+        }
+        engine._run_depth1_mapping(["10.0.0.1", "10.0.0.2"])
+        ctx = engine._mini_loop.call_args[0][0]
+        ips = [h["target"] for h in ctx["target_hosts"]]
+        assert "10.0.0.1" in ips
+        assert "10.0.0.2" in ips
+
+
+class TestRunDepth2DeepDive:
+    def _make_engine(self):
+        with patch("src.core.reconesis.NmapExecutor"), \
+             patch("src.core.reconesis.GroqAgent"), \
+             patch("src.core.reconesis.TOONParser"), \
+             patch("src.core.reconesis.CriticalityAssessor"), \
+             patch("src.core.reconesis.ExploitLookup"):
+            engine = ReconesisEngine()
+            engine._mini_loop = MagicMock()
+            return engine
+
+    def test_calls_mini_loop_with_depth2_and_inject_vulners(self):
+        engine = self._make_engine()
+        engine._host_map = {"10.0.0.1": _make_host("10.0.0.1")}
+        critical_high = [{"ip": "10.0.0.1", "type": "Database Server"}]
+        engine._run_depth2_deep_dive(critical_high)
+        assert engine._mini_loop.called
+        ctx = engine._mini_loop.call_args[0][0]
+        assert ctx["depth"] == 2
+        assert engine._mini_loop.call_args[1].get("inject_vulners") is True
+
+    def test_resolves_target_hosts_from_host_map(self):
+        engine = self._make_engine()
+        host = _make_host("10.0.0.1")
+        engine._host_map = {"10.0.0.1": host}
+        critical_high = [{"ip": "10.0.0.1", "type": "Database Server"}]
+        engine._run_depth2_deep_dive(critical_high)
+        ctx = engine._mini_loop.call_args[0][0]
+        assert ctx["target_hosts"] == [host]
+
+
+class TestRunDepth3Deepest:
+    def _make_engine(self):
+        with patch("src.core.reconesis.NmapExecutor"), \
+             patch("src.core.reconesis.GroqAgent"), \
+             patch("src.core.reconesis.TOONParser"), \
+             patch("src.core.reconesis.CriticalityAssessor"), \
+             patch("src.core.reconesis.ExploitLookup"):
+            engine = ReconesisEngine()
+            engine._mini_loop = MagicMock()
+            return engine
+
+    def test_calls_mini_loop_with_depth3_and_inject_vulners(self):
+        engine = self._make_engine()
+        engine._host_map = {"10.0.0.1": _make_host("10.0.0.1")}
+        critical_high = [{"ip": "10.0.0.1", "type": "Mail Server"}]
+        engine._run_depth3_deepest(critical_high)
+        ctx = engine._mini_loop.call_args[0][0]
+        assert ctx["depth"] == 3
+        assert engine._mini_loop.call_args[1].get("inject_vulners") is True
+
+
