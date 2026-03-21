@@ -6,6 +6,7 @@ import json
 import logging
 from src.utils.config import Config
 from src.utils.toon_dialect import ToonDialect
+from src.utils.exceptions import ReconesisAPIError, ReconesisParseError
 
 _DIALECT_RING = (
     "SCAN DATA is in compressed dialect:\n"
@@ -364,6 +365,12 @@ class GroqAgent:
                 self.logger.warning("classify_hosts: empty or error response from Groq")
                 return []
             return json.loads(result)
+        except ReconesisAPIError as e:
+            self.logger.warning(f"classify_hosts API error (reason=api_error): {e}")
+            return []
+        except (ReconesisParseError, json.JSONDecodeError) as e:
+            self.logger.warning(f"classify_hosts parse error (reason=parse_error): {e}")
+            return []
         except Exception as e:
             self.logger.warning(f"classify_hosts failed: {e}")
             return []
@@ -482,19 +489,19 @@ class GroqAgent:
                         return result, choice.get("finish_reason", "stop")
                     except Exception as retry_err:
                         self.logger.error(f"Retry after rate limit also failed: {retry_err}")
-                        return "", "error"
+                        raise ReconesisAPIError(f"Retry after rate limit also failed: {retry_err}") from retry_err
                 if status_code == 401:
                     self.logger.error("API authentication failed — check your GROQ_API_KEY")
-            return "", "error"
+            raise ReconesisAPIError(f"Groq API HTTP error ({status_code}): {e}") from e
         except requests.exceptions.Timeout:
             self.logger.error(f"Groq API request timed out after {timeout} seconds")
-            return "", "error"
+            raise ReconesisAPIError("Groq API request timed out")
         except requests.exceptions.RequestException as e:
             self.logger.error(f"Groq API connection error: {e}")
-            return "", "error"
+            raise ReconesisAPIError(f"Groq API connection error: {e}") from e
         except (KeyError, ValueError) as e:
             self.logger.error(f"Failed to parse Groq API response: {e}")
-            return "", "error"
+            raise ReconesisParseError(f"Failed to parse Groq API response: {e}") from e
 
     def _build_analysis_prompt(self, toon_data: list) -> tuple:
         """
@@ -549,17 +556,20 @@ class GroqAgent:
 
     def decide(self, hosts: list, gap_report: list, scan_history: list) -> dict:
         """Ask the LLM what to scan next given all accumulated hosts and the gap report.
-        Returns a decision dict or {} on parse failure (caller uses fallback)."""
+        Raises ReconesisParseError on empty or unparseable response.
+        Raises ReconesisAPIError if the API call fails."""
         gap_map = {g["ip"]: g["gaps"] for g in gap_report}
         toon_block = ToonDialect.render_with_gaps(hosts, gap_map)
         history_block = ToonDialect.compress_history(scan_history)
         user_content = f"{toon_block}\n\n{history_block}"
-        raw, _ = self._query_groq(
+        result, _ = self._query_groq(
             system_prompt=DECIDE_SYSTEM_PROMPT,
             user_prompt=user_content,
             strip_backticks=False
         )
-        raw = raw.strip()
+        if not result:
+            raise ReconesisParseError("decide: empty response from Groq")
+        raw = result.strip()
         if raw.startswith("```"):
             raw = re.sub(r"^```[a-z]*\n?", "", raw)
             raw = re.sub(r"\n?```$", "", raw)
@@ -570,6 +580,5 @@ class GroqAgent:
             decision.setdefault("new_targets", [])
             decision.setdefault("continue", True)
             return decision
-        except (json.JSONDecodeError, ValueError) as e:
-            self.logger.warning(f"decide() JSON parse failed: {e}. Falling back.")
-            return {}
+        except json.JSONDecodeError as e:
+            raise ReconesisParseError(f"decide: failed to parse JSON response: {e}") from e

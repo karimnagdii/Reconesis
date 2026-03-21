@@ -265,15 +265,17 @@ class TestGroqAgentDecide:
         assert result["continue"] is True
         assert result["new_targets"] == []
 
-    def test_missing_command_key_returns_empty(self):
+    def test_missing_command_key_raises_parse_error(self):
+        from src.utils.exceptions import ReconesisParseError
         agent = self._make_agent('{"rationale": "done", "continue": false}')
-        result = agent.decide(hosts=[], gap_report=[], scan_history=[])
-        assert result == {}
+        with pytest.raises((ReconesisParseError, ValueError)):
+            agent.decide(hosts=[], gap_report=[], scan_history=[])
 
-    def test_malformed_json_returns_empty(self):
+    def test_malformed_json_raises_parse_error(self):
+        from src.utils.exceptions import ReconesisParseError
         agent = self._make_agent("this is not json at all")
-        result = agent.decide(hosts=[], gap_report=[], scan_history=[])
-        assert result == {}
+        with pytest.raises(ReconesisParseError):
+            agent.decide(hosts=[], gap_report=[], scan_history=[])
 
     def test_code_fenced_json_is_stripped_and_parsed(self):
         fenced = '```json\n{"command": "nmap -O 10.0.0.1", "rationale": "os", "continue": true, "new_targets": []}\n```'
@@ -451,3 +453,119 @@ class TestStartScan:
         ])
         engine.start_scan("10.0.0.0/24")
         engine._run_hunter.assert_called_once()
+
+
+from unittest.mock import MagicMock, patch
+from src.utils.exceptions import ReconesisAPIError, ReconesisParseError
+
+
+class TestOodaStep:
+    """Tests for the extracted _ooda_step method."""
+
+    def _make_engine(self):
+        from src.core.reconesis import ReconesisEngine
+        engine = ReconesisEngine()
+        engine._host_map = {
+            "10.0.0.1": {
+                "target": "10.0.0.1", "ports": [], "os": {"name": "Linux", "accuracy": 90},
+                "type": "Generic Host", "criticality": "LOW",
+            }
+        }
+        return engine
+
+    def test_ooda_step_terminates_on_no_gaps(self):
+        """When _compute_gaps returns [], _ooda_step returns a termination reason."""
+        engine = self._make_engine()
+        engine._host_map["10.0.0.1"]["ports"] = []  # no ports = no gaps
+        with patch.object(engine, '_run_port_scan', return_value=[]), \
+             patch.object(engine, '_classify_hosts', return_value=(list(engine._host_map.values()), [])), \
+             patch.object(engine, '_update_scan_history'):
+            reason, _ = engine._ooda_step(depth=1, prev_hash="abc")
+        assert reason is not None  # terminated
+
+    def test_ooda_step_terminates_on_hash_saturation(self):
+        """When the new hash equals prev_hash, _ooda_step returns a termination reason."""
+        engine = self._make_engine()
+        mock_decision = {"command": "nmap -sS 10.0.0.1", "continue": False, "new_targets": []}
+        with patch.object(engine, '_run_port_scan', return_value=[]), \
+             patch.object(engine, '_classify_hosts', return_value=([], [])), \
+             patch.object(engine, '_update_scan_history'), \
+             patch.object(engine, '_compute_gaps', return_value=[{"ip": "10.0.0.1", "gaps": ["os_unknown"]}]), \
+             patch.object(engine.agent, 'decide', return_value=mock_decision), \
+             patch.object(engine, '_execute_and_merge'), \
+             patch.object(engine.parser, 'compute_hash', return_value="same_hash"):
+            reason, _ = engine._ooda_step(depth=1, prev_hash="same_hash")
+        assert reason is not None
+
+
+class TestOodaStepExceptions:
+    """Tests for named exception handling in _ooda_step."""
+
+    def _make_engine(self):
+        from src.core.reconesis import ReconesisEngine
+        engine = ReconesisEngine()
+        engine._host_map = {}
+        return engine
+
+    def test_api_error_from_query_groq_caught_in_ooda(self):
+        """ReconesisAPIError raised by decide is caught, returns api_error."""
+        engine = self._make_engine()
+        with patch.object(engine, '_run_port_scan', return_value=[]), \
+             patch.object(engine, '_classify_hosts', return_value=([], [])), \
+             patch.object(engine, '_update_scan_history'), \
+             patch.object(engine, '_compute_gaps', return_value=[{"ip": "10.0.0.1", "gaps": ["os_unknown"]}]), \
+             patch.object(engine.agent, 'decide', side_effect=ReconesisAPIError("api down")):
+            reason, _ = engine._ooda_step(depth=2, prev_hash="")
+        assert reason == "api_error"
+
+    def test_parse_error_triggers_generate_strategy_fallback(self):
+        """ReconesisParseError from decide() causes generate_strategy() to be called."""
+        engine = self._make_engine()
+        with patch.object(engine, '_run_port_scan', return_value=[]), \
+             patch.object(engine, '_classify_hosts', return_value=([], [])), \
+             patch.object(engine, '_update_scan_history'), \
+             patch.object(engine, '_compute_gaps', return_value=[{"ip": "10.0.0.1", "gaps": ["os_unknown"]}]), \
+             patch.object(engine.agent, 'decide', side_effect=ReconesisParseError("bad json")), \
+             patch.object(engine.agent, 'generate_strategy', return_value="nmap -sS 10.0.0.0/24") as mock_gen, \
+             patch.object(engine, '_execute_and_merge'), \
+             patch.object(engine.parser, 'compute_hash', return_value="new_hash"):
+            reason, _ = engine._ooda_step(depth=2, prev_hash="old_hash")
+        mock_gen.assert_called_once()
+        assert reason is None  # continued, not terminated
+
+    def test_generate_strategy_failure_returns_strategy_fallback_failed(self):
+        """If both decide() and generate_strategy() fail, _ooda_step returns strategy_fallback_failed."""
+        engine = self._make_engine()
+        with patch.object(engine, '_run_port_scan', return_value=[]), \
+             patch.object(engine, '_classify_hosts', return_value=([], [])), \
+             patch.object(engine, '_update_scan_history'), \
+             patch.object(engine, '_compute_gaps', return_value=[{"ip": "10.0.0.1", "gaps": ["os_unknown"]}]), \
+             patch.object(engine.agent, 'decide', side_effect=ReconesisParseError("bad json")), \
+             patch.object(engine.agent, 'generate_strategy', side_effect=ReconesisAPIError("api down")):
+            reason, _ = engine._ooda_step(depth=2, prev_hash="")
+        assert reason == "strategy_fallback_failed"
+
+
+class TestComputeGapsAdditional:
+    def _make_engine(self):
+        from src.core.reconesis import ReconesisEngine
+        return ReconesisEngine()
+
+    def test_empty_host_map_returns_no_gaps(self):
+        engine = self._make_engine()
+        engine._host_map = {}
+        assert engine._compute_gaps() == []
+
+    def test_host_with_no_ports_returns_os_gap(self):
+        engine = self._make_engine()
+        engine._host_map = {
+            "10.0.0.1": {
+                "target": "10.0.0.1",
+                "ports": [],
+                "os": {"name": "unknown", "accuracy": 0},
+                "type": "Generic Host", "criticality": "LOW",
+            }
+        }
+        gaps = engine._compute_gaps()
+        assert len(gaps) == 1
+        assert "os_unknown" in gaps[0]["gaps"]
