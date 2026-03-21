@@ -93,6 +93,8 @@ class NmapExecutor:
             if not completed:
                 return None, 0
 
+            # Threads are already joined inside _wait_with_timeout if it timed out.
+            # These joins only execute on the normal-exit path.
             stdout_thread.join()
             stderr_thread.join()
             stdout = stdout_chunks[0] if stdout_chunks else ""
@@ -149,7 +151,7 @@ class NmapExecutor:
                 self._emit("log", {"level": "info", "message": f"Nmap running… ({elapsed:.0f}s elapsed)"})
                 last_heartbeat = time.time()
             try:
-                proc.wait(timeout=min(10, timeout_secs - elapsed))
+                proc.wait(timeout=max(0.1, min(10, timeout_secs - elapsed)))
                 return True  # process exited
             except subprocess.TimeoutExpired:
                 continue  # still running, loop again for heartbeat/timeout check
@@ -183,7 +185,7 @@ class NmapExecutor:
             return ""
 
         # Remove dangerous shell operators that shouldn't be in an nmap command
-        for dangerous in [";", "&&", "||", "|", ">", ">>", "<", "$("]:
+        for dangerous in [";", "&&", "||", "|", ">", ">>", "<", "$(", "`"]:
             if dangerous in command:
                 self.logger.warning(f"Stripped dangerous operator '{dangerous}' from command.")
                 command = command.split(dangerous)[0].strip()

