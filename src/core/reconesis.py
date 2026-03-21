@@ -446,6 +446,54 @@ class ReconesisEngine:
 
         self.logger.info("Reconesis Task Completed.")
 
+    def _mini_loop(self, context: dict, inject_vulners: bool = False) -> None:
+        """Drive one depth's scan cycle. Calls decide_for_depth() up to MAX_SUB_ITERATIONS
+        times, merging results after each command. Exits early on continue:false, hash
+        saturation, or API/parse error. inject_vulners is forwarded to _execute_and_merge().
+
+        Computes gap_map from _compute_gaps() before each decide_for_depth() call and
+        injects it into context["gap_map"] so GroqAgent can call render_with_gaps()
+        without accessing engine state directly."""
+        prev_hash = ""
+        for _ in range(Config.MAX_SUB_ITERATIONS):
+            # Compute gap_map on the engine side (has access to _compute_gaps and _host_map)
+            gap_report = self._compute_gaps()
+            context["gap_map"] = {g["ip"]: g["gaps"] for g in gap_report}
+
+            try:
+                decision = self.agent.decide_for_depth(context)
+            except (ReconesisAPIError, ReconesisParseError) as e:
+                self._log(f"decide_for_depth error in depth {context['depth']}: {e}", "warning")
+                break
+
+            if not decision or not decision.get("command"):
+                break
+
+            self._execute_and_merge(decision["command"], inject_vulners=inject_vulners)
+
+            new_targets = [t for t in decision.get("new_targets", []) if t not in self._host_map]
+            for t in new_targets:
+                self._host_map[t] = {
+                    "target": t, "status": "up",
+                    "os": {"name": "unknown", "accuracy": 0},
+                    "ports": [], "criticality": "UNKNOWN", "type": "Unknown",
+                }
+            if new_targets:
+                self._log(f"Depth {context['depth']}: seeded {len(new_targets)} new target(s): {new_targets}")
+
+            if not decision.get("continue", True):
+                self._log(f"Depth {context['depth']}: LLM signalled complete.")
+                break
+
+            new_hash = self.parser.compute_hash(list(self._host_map.values()))
+            if new_hash == prev_hash:
+                self._log(f"Depth {context['depth']}: hash saturation — no new information.")
+                break
+            prev_hash = new_hash
+
+            context["scan_history"] = self.scan_history
+            context["hosts"] = list(self._host_map.values())
+
     def _ooda_step(self, depth: int, prev_hash: str) -> tuple:
         """Execute one full Observe-Orient-Decide-Act iteration.
 

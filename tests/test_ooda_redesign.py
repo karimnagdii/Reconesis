@@ -645,3 +645,103 @@ class TestDecideForDepth:
         ctx = self._make_context(depth=1)
         with pytest.raises(ReconesisParseError):
             agent.decide_for_depth(ctx)
+
+
+class TestMiniLoop:
+    def _make_engine(self):
+        with patch("src.core.reconesis.NmapExecutor"), \
+             patch("src.core.reconesis.GroqAgent"), \
+             patch("src.core.reconesis.TOONParser"), \
+             patch("src.core.reconesis.CriticalityAssessor"), \
+             patch("src.core.reconesis.ExploitLookup"):
+            engine = ReconesisEngine()
+            engine._execute_and_merge = MagicMock()
+            return engine
+
+    def _make_decision(self, command="nmap -sS 10.0.0.1", cont=True, new_targets=None):
+        return {"command": command, "rationale": "x", "continue": cont,
+                "new_targets": new_targets or []}
+
+    def test_exits_on_continue_false(self):
+        engine = self._make_engine()
+        engine.agent.decide_for_depth = MagicMock(
+            return_value=self._make_decision(cont=False))
+        engine.parser.compute_hash = MagicMock(return_value="hash1")
+        engine._compute_gaps = MagicMock(return_value=[])
+        ctx = {"depth": 1, "depth_purpose": "", "target_hosts": [],
+               "hosts": [], "scan_history": []}
+        engine._mini_loop(ctx)
+        assert engine.agent.decide_for_depth.call_count == 1
+
+    def test_exits_on_hash_saturation(self):
+        engine = self._make_engine()
+        engine.agent.decide_for_depth = MagicMock(
+            return_value=self._make_decision(cont=True))
+        engine.parser.compute_hash = MagicMock(return_value="same_hash")
+        engine._compute_gaps = MagicMock(return_value=[])
+        ctx = {"depth": 1, "depth_purpose": "", "target_hosts": [],
+               "hosts": [], "scan_history": []}
+        engine._mini_loop(ctx)
+        assert engine.agent.decide_for_depth.call_count >= 1
+
+    def test_exits_on_api_error(self):
+        from src.utils.exceptions import ReconesisAPIError
+        engine = self._make_engine()
+        engine.agent.decide_for_depth = MagicMock(
+            side_effect=ReconesisAPIError("boom"))
+        engine._compute_gaps = MagicMock(return_value=[])
+        ctx = {"depth": 1, "depth_purpose": "", "target_hosts": [],
+               "hosts": [], "scan_history": []}
+        engine._mini_loop(ctx)   # should not raise
+        assert engine._execute_and_merge.call_count == 0
+
+    def test_exits_after_max_sub_iterations(self):
+        from src.utils.config import Config
+        engine = self._make_engine()
+        call_count = [0]
+        def side_effect(ctx):
+            call_count[0] += 1
+            return self._make_decision(cont=True)
+        engine.agent.decide_for_depth = MagicMock(side_effect=side_effect)
+        engine.parser.compute_hash = MagicMock(side_effect=lambda x: str(call_count[0]))
+        engine._compute_gaps = MagicMock(return_value=[])
+        ctx = {"depth": 1, "depth_purpose": "", "target_hosts": [],
+               "hosts": [], "scan_history": []}
+        engine._mini_loop(ctx)
+        assert call_count[0] == Config.MAX_SUB_ITERATIONS
+
+    def test_seeds_new_targets_as_stubs(self):
+        engine = self._make_engine()
+        engine.agent.decide_for_depth = MagicMock(return_value=self._make_decision(
+            cont=False, new_targets=["10.0.0.99"]))
+        engine.parser.compute_hash = MagicMock(return_value="h1")
+        engine._compute_gaps = MagicMock(return_value=[])
+        ctx = {"depth": 1, "depth_purpose": "", "target_hosts": [],
+               "hosts": [], "scan_history": []}
+        engine._mini_loop(ctx)
+        assert "10.0.0.99" in engine._host_map
+        assert engine._host_map["10.0.0.99"]["status"] == "up"
+
+    def test_inject_vulners_forwarded(self):
+        engine = self._make_engine()
+        engine.agent.decide_for_depth = MagicMock(
+            return_value=self._make_decision(cont=False))
+        engine.parser.compute_hash = MagicMock(return_value="h1")
+        engine._compute_gaps = MagicMock(return_value=[])
+        ctx = {"depth": 2, "depth_purpose": "", "target_hosts": [],
+               "hosts": [], "scan_history": []}
+        engine._mini_loop(ctx, inject_vulners=True)
+        engine._execute_and_merge.assert_called_once_with(
+            "nmap -sS 10.0.0.1", inject_vulners=True)
+
+    def test_inject_vulners_false_by_default(self):
+        engine = self._make_engine()
+        engine.agent.decide_for_depth = MagicMock(
+            return_value=self._make_decision(cont=False))
+        engine.parser.compute_hash = MagicMock(return_value="h1")
+        engine._compute_gaps = MagicMock(return_value=[])
+        ctx = {"depth": 1, "depth_purpose": "", "target_hosts": [],
+               "hosts": [], "scan_history": []}
+        engine._mini_loop(ctx)  # inject_vulners not passed — defaults to False
+        engine._execute_and_merge.assert_called_once_with(
+            "nmap -sS 10.0.0.1", inject_vulners=False)
