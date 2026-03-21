@@ -47,11 +47,26 @@ class TestSanitizeCommand:
         result = executor._sanitize_command(cmd)
         assert "$(" not in result
 
-    def test_top_ports_replaced_with_explicit_list(self, executor):
+    def test_top_ports_stripped_no_replacement(self, executor):
         cmd = "nmap -sS --top-ports 1000 192.168.1.0/24"
         result = executor._sanitize_command(cmd)
         assert "--top-ports" not in result
-        assert "-p " in result
+        assert "-p " not in result   # no port list injected
+
+    def test_p_dash_stripped(self, executor):
+        cmd = "nmap -sV -p- 192.168.1.1"
+        result = executor._sanitize_command(cmd)
+        assert "-p-" not in result
+
+    def test_A_stripped_on_subnet(self, executor):
+        cmd = "nmap -A 192.168.1.0/24"
+        result = executor._sanitize_command(cmd)
+        assert "-A" not in result
+
+    def test_A_allowed_on_single_host(self, executor):
+        cmd = "nmap -A 192.168.1.1"
+        result = executor._sanitize_command(cmd)
+        assert "-A" in result
 
     def test_t4_appended_when_no_timing_flag(self, executor):
         cmd = "nmap -sS 192.168.1.0/24"

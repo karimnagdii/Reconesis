@@ -211,20 +211,18 @@ class NmapExecutor:
                 self.logger.warning(f"Stripped dangerous operator '{dangerous}' from command.")
                 command = command.split(dangerous)[0].strip()
 
-        # Fallback: if the AI used --top-ports despite prompt guidance, replace it with a
-        # comprehensive explicit port list. --top-ports misses critical service ports
-        # (MongoDB 27017, Redis 6379, BGP 179, etc.) and can't be safely supplemented
-        # with -p on all nmap versions. This only fires if the AI ignores the prompt.
-        SCAN_PORTS = (
-            "21,22,23,25,53,80,110,111,135,139,143,161,179,389,443,445,"
-            "465,512,513,514,587,636,873,993,995,1433,1521,2222,2375,"
-            "3000,3306,3389,5432,5900,5984,6379,8080,8443,8888,9090,"
-            "9200,9300,9600,11211,15672,27017,28017,554,1935,8000,8899,37777"
-        )
+        if "-p-" in command:
+            command = command.replace("-p-", "").strip()
+            self.logger.warning("Stripped '-p-' (full port scan) — falls back to nmap default 1000 ports.")
+
+        if "-A" in command and re.search(r'\b\d+\.\d+\.\d+\.\d+/\d+\b', command):
+            command = command.replace("-A", "").strip()
+            self.logger.warning("Stripped '-A' on subnet target — allowed only for single hosts.")
+
         if "--top-ports" in command:
-            command = re.sub(r'--top-ports\s+\S+', f'-p {SCAN_PORTS}', command)
+            command = re.sub(r'--top-ports\s+\S+', '', command).strip()
             self.logger.warning(
-                "AI used --top-ports despite prompt guidance — replaced with explicit port list."
+                "AI used --top-ports — stripped with no replacement (depth prompts guide port selection)."
             )
 
         # Timing template: default T4 (aggressive, fast on LANs).
