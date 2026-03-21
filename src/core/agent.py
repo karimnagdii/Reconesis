@@ -90,10 +90,8 @@ class GroqAgent:
         ),
         "hunter_database": _build_hunter_prompt(
             "Database Server",
-            "deep investigation: identify the exact database engine and version, "
+            "deeply investigate: identify the exact database engine and version, "
             "check for authentication weaknesses, and enumerate database-specific vulnerabilities. "
-            "Use version detection (-sV), OS fingerprinting (-O), and relevant NSE scripts such as "
-            "mysql-info, mysql-empty-password, ms-sql-info, pgsql-brute, mongodb-info, redis-info. "
             "Select scripts appropriate for the specific database type detected",
             "mysql-info, mysql-empty-password, ms-sql-info, pgsql-brute, mongodb-info, redis-info",
         ),
@@ -101,9 +99,6 @@ class GroqAgent:
             "Mail Server",
             "verify mail services and check for critical misconfigurations: "
             "open relays, SMTP user enumeration, and STARTTLS support. "
-            "Use version detection (-sV) and relevant NSE scripts such as "
-            "smtp-open-relay, smtp-enum-users, smtp-commands, smtp-vuln-cve2010-4344, "
-            "imap-capabilities, pop3-capabilities. "
             "Scan all standard mail ports: 25, 110, 143, 465, 587, 993, 995",
             "smtp-open-relay, smtp-enum-users, smtp-commands, smtp-vuln-cve2010-4344, "
             "imap-capabilities, pop3-capabilities",
@@ -111,18 +106,13 @@ class GroqAgent:
         "hunter_infra": _build_hunter_prompt(
             "Network Infrastructure (Router/Firewall)",
             "fingerprint the device, identify the firmware version, and check for "
-            "exposed management interfaces, default credentials, and SNMP community strings. "
-            "Use OS fingerprinting (-O), version detection (-sV), and relevant NSE scripts such as "
-            "banner, ssh-auth-methods, http-title, snmp-brute, snmp-info, telnet-brute",
+            "exposed management interfaces, default credentials, and SNMP community strings",
             "banner, ssh-auth-methods, http-title, snmp-brute, snmp-info, telnet-brute",
         ),
         "hunter_ldap": _build_hunter_prompt(
             "Active Directory / LDAP Server",
             "enumerate directory services, identify exposed accounts, check for "
             "anonymous bind vulnerabilities, and identify privilege escalation vectors. "
-            "Use version detection (-sV) and relevant NSE scripts such as "
-            "ldap-search, ldap-brute, ldap-rootdse, msrpc-enum, smb-security-mode, "
-            "krb5-enum-users (if port 88 is open), dns-srv-enum. "
             "Scan all standard LDAP ports: 389, 636, 3268, 3269, 88",
             "ldap-search, ldap-brute, ldap-rootdse, msrpc-enum, smb-security-mode, "
             "krb5-enum-users, dns-srv-enum",
@@ -132,8 +122,6 @@ class GroqAgent:
             "identify SSH hardening posture, check for weak authentication, "
             "enumerate supported key exchange and cipher algorithms, and identify whether "
             "multi-factor authentication is enforced. "
-            "Use version detection (-sV) and relevant NSE scripts such as "
-            "ssh-auth-methods, ssh-hostkey, ssh2-enum-algos, banner. "
             "Scan both standard SSH (22) and non-standard bastion ports (2222, 22222)",
             "ssh-auth-methods, ssh-hostkey, ssh2-enum-algos, banner",
         ),
@@ -142,9 +130,6 @@ class GroqAgent:
             "identify the middleware platform, find exposed management "
             "consoles, check for Java deserialization vulnerabilities, and enumerate "
             "deployed applications. "
-            "Use version detection (-sV) and relevant NSE scripts such as "
-            "http-title, http-enum, http-auth-finder, http-default-accounts, "
-            "http-vuln-cve2010-0738 (JBoss), ajp-headers, ajp-request. "
             "Scan app server ports: 8080, 8443, 4848, 9990, 7001, 7002",
             "http-title, http-enum, http-auth-finder, http-default-accounts, "
             "http-vuln-cve2010-0738, ajp-headers, ajp-request",
@@ -154,9 +139,6 @@ class GroqAgent:
             "identify the web technology stack, enumerate directories "
             "and virtual hosts, check for common web vulnerabilities, and find exposed "
             "admin interfaces. "
-            "Use version detection (-sV) and relevant NSE scripts such as "
-            "http-title, http-headers, http-enum, http-methods, http-server-header, "
-            "http-vuln-cve2017-5638, http-shellshock, http-robots.txt, http-git. "
             "Scan all common web ports: 80, 443, 8080, 8443, 8000, 8888",
             "http-title, http-headers, http-enum, http-methods, http-server-header, "
             "http-vuln-cve2017-5638, http-shellshock, http-robots.txt, http-git",
@@ -166,9 +148,6 @@ class GroqAgent:
             "enumerate RTSP stream URLs, identify the camera make/model, "
             "check for default credentials on the web management interface, and detect "
             "known firmware vulnerabilities. "
-            "Use version detection (-sV) and relevant NSE scripts such as "
-            "rtsp-url-brute, rtsp-methods, http-default-accounts, http-auth-finder, "
-            "http-title, http-methods. "
             "Scan all standard camera ports: 554 (RTSP), 1935 (RTMP), 8000, 8080, 8888 "
             "(management), 8899 (ONVIF), 37777 (Dahua)",
             "rtsp-url-brute, rtsp-methods, http-default-accounts, http-auth-finder, "
@@ -181,9 +160,6 @@ class GroqAgent:
             "firmware vulnerabilities (including QNAP QLocker/DeadBolt and Synology CVEs). "
             "SMB enumeration is included because NAS devices universally offer SMB shares "
             "alongside NFS and AFP. "
-            "Use version detection (-sV) and relevant NSE scripts such as "
-            "smb-enum-shares, smb-security-mode, nfs-ls, nfs-showmount, ftp-anon, "
-            "http-default-accounts, http-auth-finder, http-title. "
             "Scan all standard NAS ports: 21 (FTP), 22 (SSH), 80, 139, 443, 445 (SMB), "
             "548 (AFP), 873 (rsync), 2049 (NFS), 3260 (iSCSI), 5000, 5001 (Synology DSM), "
             "8080 (QNAP)",
@@ -195,9 +171,6 @@ class GroqAgent:
             "enumerate SMB shares and their permissions, verify SMB signing "
             "enforcement, check for null session access, test for EternalBlue (MS17-010) and "
             "other critical SMB vulnerabilities, and enumerate RPC endpoints. "
-            "Use version detection (-sV) and relevant NSE scripts such as "
-            "smb-enum-shares, smb-vuln-ms17-010, smb-security-mode, smb-os-discovery, "
-            "msrpc-enum, smb-vuln-ms10-054. "
             "Scan all standard Windows file sharing ports: 135 (MSRPC), 139 (NetBIOS), "
             "445 (SMB), 3389 (RDP)",
             "smb-enum-shares, smb-vuln-ms17-010, smb-security-mode, smb-os-discovery, "
@@ -208,17 +181,13 @@ class GroqAgent:
             "test for zone transfer (AXFR) misconfiguration, verify whether "
             "open recursion is enabled, fingerprint the resolver version via NSID, and detect "
             "DNS cache snooping vulnerabilities. "
-            "Use version detection (-sV) and relevant NSE scripts such as "
-            "dns-zone-transfer, dns-nsid, dns-cache-snoop, dns-recursion, dns-service-discovery. "
             "Scan all standard DNS server ports: 53 (DNS), 953 (BIND RNDC)",
             "dns-zone-transfer, dns-nsid, dns-cache-snoop, dns-recursion, dns-service-discovery",
         ),
         "hunter_generic": _build_hunter_prompt(
             "Web Server or general host",
             "identify the web technology stack, check for common web vulnerabilities, "
-            "and enumerate exposed endpoints. "
-            "Use version detection (-sV) and relevant NSE scripts such as "
-            "http-title, http-headers, http-enum, http-methods, http-vuln-cve2017-5638, vuln",
+            "and enumerate exposed endpoints",
             "http-title, http-headers, http-enum, http-methods, http-vuln-cve2017-5638, vuln",
         ),
     }
