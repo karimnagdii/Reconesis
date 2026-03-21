@@ -253,17 +253,38 @@ class GroqAgent:
         self._session = requests.Session()
 
     def _build_history_context(self, previous_findings: list) -> str:
-        """Build the history context string for LLM prompts. Caps to last 2 depths."""
+        """Build the compressed history context block appended to LLM user prompts.
+
+        Delegates to ToonDialect.compress_history() which caps output to the last two
+        scan depths. Returns an empty string when there are no prior findings so callers
+        can unconditionally concatenate the result.
+
+        Args:
+            previous_findings: List of scan-history entry dicts as stored in
+                               ReconesisEngine.scan_history.
+
+        Returns:
+            A newline-prefixed summary string, or empty string if previous_findings is empty.
+        """
         if not previous_findings:
             return ""
         summary = ToonDialect.compress_history(previous_findings)
         return f"\n\nPrevious scan findings (showing last 2 depths):\n{summary}\n"
 
     def _select_system_prompt(self, phase: str, types_present: set) -> str:
-        """Select system prompt for phase and asset types.
+        """Select the correct system prompt for the given scan phase and target asset types.
 
-        Priority determined by _TYPE_PROMPT_MAP insertion order — iterates
-        the map (not the set) so database > mail > infra priority is preserved.
+        For discovery and port_scan phases always returns the Scout prompt. For the hunter
+        phase, iterates _TYPE_PROMPT_MAP in insertion order (database > mail > infra ...)
+        so the highest-priority asset type wins when multiple types are present. Falls back
+        to hunter_generic when no type substring matches.
+
+        Args:
+            phase: Scan phase string — one of "discovery", "port_scan", or "hunter".
+            types_present: Set of asset type strings (lowercased) from critical_targets.
+
+        Returns:
+            The selected system prompt string from _SYSTEM_PROMPTS.
         """
         if phase in ("discovery", "port_scan"):
             return self._SYSTEM_PROMPTS["scout"]
@@ -275,7 +296,22 @@ class GroqAgent:
         return self._SYSTEM_PROMPTS["hunter_generic"]
 
     def _build_user_prompt(self, phase: str, context_data: dict, history_context: str) -> str:
-        """Build the user-facing prompt for the given phase."""
+        """Build the user-facing prompt body for the given scan phase.
+
+        Generates a phase-specific instruction block that tells the LLM what targets to
+        scan and what objective to pursue. The history_context string (from
+        _build_history_context) is appended verbatim so the LLM can avoid re-scanning
+        already-explored hosts.
+
+        Args:
+            phase: Scan phase — "discovery", "port_scan", or "hunter".
+            context_data: Dict of phase-specific keys; "target_scope" for discovery,
+                          "live_hosts" for port_scan, "critical_targets" for hunter.
+            history_context: Pre-formatted history block to append (may be empty string).
+
+        Returns:
+            The complete user prompt string to pass to _query_groq().
+        """
         target_scope = context_data.get("target_scope", "unknown")
 
         if phase == "discovery":

@@ -215,9 +215,20 @@ class ToonDialect:
 
     @staticmethod
     def compress_history(scan_history: list) -> str:
-        """
-        Compress scan history to dialect. Takes FULL list — caps to last 2 internally.
-        Prepends inline decoder header for hunter/scout prompts that lack _DIALECT_RING.
+        """Serialize scan history to a compact one-line-per-depth dialect string.
+
+        Takes the full scan_history list and caps output to the last two entries so the
+        LLM context does not grow unboundedly over many OODA depths. Prepends an inline
+        decoder header because hunter and scout prompts may not include _DIALECT_RING.
+
+        Args:
+            scan_history: List of scan-history entry dicts produced by
+                          ReconesisEngine._update_scan_history(). Each entry has
+                          ``depth`` (int) and ``hosts`` (list of host summary dicts).
+
+        Returns:
+            A multi-line string with a header row followed by one ``d<n>: ...`` line per
+            depth. Returns only the header if scan_history is empty.
         """
         header = (
             "History (T/C aliases: D=Database M=Mail R=Router F=Firewall "
@@ -245,8 +256,23 @@ class ToonDialect:
 
     @staticmethod
     def render_with_gaps(hosts: list, gap_map: dict) -> str:
-        """Render all hosts in TOON with ? (unknown) and ! (no scripts) gap markers.
-        gap_map: {ip: [gap_string, ...]} from _compute_gaps() output."""
+        """Render all hosts in TOON dialect annotated with gap markers for the Decide phase.
+
+        For each host, the OS field is replaced with ``?`` when OS accuracy is below the
+        threshold. Each port line appends ``?`` when version info is missing and ``!`` when
+        NSE script output is absent for interesting ports. These markers allow the LLM to
+        identify the most information-dense scan targets in a single compact context block.
+
+        Args:
+            hosts: List of TOON host dicts from ReconesisEngine._host_map.values().
+            gap_map: Dict mapping IP string to a list of gap keys produced by
+                     ReconesisEngine._compute_gaps(). Pass an empty dict to render
+                     all hosts without any gap markers.
+
+        Returns:
+            Multi-block dialect string (blocks separated by blank lines), or empty string
+            when hosts is empty.
+        """
         if not hosts:
             return ""
         blocks = []

@@ -148,7 +148,16 @@ class ReconesisEngine:
         return gaps
 
     def _update_scan_history(self, depth: int, classified: list):
-        """Append a scan history entry for this depth. Called after Orient phase."""
+        """Append a scan-history entry for the current OODA depth.
+
+        Called after the Orient phase so the history always reflects fully-classified host
+        state. The entry is later consumed by _build_history_context() to provide the LLM
+        with a compressed summary of what was found in previous iterations.
+
+        Args:
+            depth: Current loop depth (1-indexed), stored verbatim in the entry.
+            classified: List of classified host dicts as returned by _classify_hosts().
+        """
         self.scan_history.append({
             "depth": depth,
             "hosts": [
@@ -163,7 +172,16 @@ class ReconesisEngine:
         })
 
     def _execute_and_merge(self, command: str):
-        """Execute an nmap command and merge parsed results into _host_map."""
+        """Execute an Nmap command and merge parsed TOON hosts into _host_map.
+
+        Accumulates total_packets into self.metrics and silently skips execution when
+        command is empty (guards against LLM returning no command). Uses _merge_host()
+        so richer port data from later scans overwrites weaker earlier data.
+
+        Args:
+            command: Prepared Nmap command string from the Decide phase. Empty string
+                     is treated as a no-op with a warning log.
+        """
         if not command:
             self._log("Act phase received empty command — skipping.", "warning")
             return
@@ -428,8 +446,23 @@ class ReconesisEngine:
         self.logger.info("Reconesis Task Completed.")
 
     def _ooda_step(self, depth: int, prev_hash: str) -> tuple:
-        """Execute one OODA iteration. Returns (termination_reason | None, new_hash).
-        termination_reason is a string when the loop should stop, None to continue."""
+        """Execute one full Observe-Orient-Decide-Act iteration.
+
+        Observe: re-scans all known hosts for deeper port/service data and merges results.
+        Orient: classifies hosts, runs Hunter Mode on CRITICAL/HIGH targets, computes gaps.
+        Decide: calls GroqAgent.decide() to pick the next command; falls back to
+                generate_strategy() on parse failure.
+        Act: executes the chosen command and seeds any LLM-suggested new targets as stubs.
+
+        Args:
+            depth: Current loop depth (1-indexed), used only for the depth-1 special case.
+            prev_hash: SHA-256 TOON hash from the previous iteration for saturation detection.
+
+        Returns:
+            Tuple of (termination_reason, new_hash). termination_reason is a non-empty string
+            when start_scan() should stop the loop (e.g. "no_gaps", "hash_saturation",
+            "llm_complete"), or None to signal that scanning should continue.
+        """
         # Observe
         new_hosts = self._run_port_scan(list(self._host_map.keys()))
         if not new_hosts and depth == 1:
