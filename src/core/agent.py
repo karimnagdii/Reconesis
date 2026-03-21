@@ -656,35 +656,6 @@ class GroqAgent:
 
         return system_prompt, user_prompt
 
-    def decide(self, hosts: list, gap_report: list, scan_history: list) -> dict:
-        """Ask the LLM what to scan next given all accumulated hosts and the gap report.
-        Raises ReconesisParseError on empty or unparseable response.
-        Raises ReconesisAPIError if the API call fails."""
-        gap_map = {g["ip"]: g["gaps"] for g in gap_report}
-        toon_block = ToonDialect.render_with_gaps(hosts, gap_map)
-        history_block = ToonDialect.compress_history(scan_history)
-        user_content = f"{toon_block}\n\n{history_block}"
-        result, _ = self._query_groq(
-            system_prompt=DECIDE_SYSTEM_PROMPT,
-            user_prompt=user_content,
-            strip_backticks=False
-        )
-        if not result:
-            raise ReconesisParseError("decide: empty response from Groq")
-        raw = result.strip()
-        if raw.startswith("```"):
-            raw = re.sub(r"^```[a-z]*\n?", "", raw)
-            raw = re.sub(r"\n?```$", "", raw)
-        try:
-            decision = json.loads(raw)
-            if "command" not in decision:
-                raise ValueError("Missing 'command' key")
-            decision.setdefault("new_targets", [])
-            decision.setdefault("continue", True)
-            return decision
-        except (json.JSONDecodeError, ValueError) as e:
-            raise ReconesisParseError(f"decide: failed to parse JSON response: {e}") from e
-
     def decide_for_depth(self, context: dict) -> dict:
         """Select a scan command for the given depth context.
 
