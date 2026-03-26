@@ -1,3 +1,4 @@
+import re
 from src.utils.criticality import CriticalityAssessor
 
 _TYPE_ALIAS = {
@@ -214,6 +215,18 @@ class ToonDialect:
         return "\n\n".join(blocks)
 
     @staticmethod
+    def _summarize_cmd(cmd: str) -> str:
+        """Compact nmap command for history: extract -p port spec and target IPs/CIDRs."""
+        p_match = re.search(r'-p\s+(\S+)', cmd)
+        targets = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}(?:/\d+)?\b', cmd)
+        parts = []
+        if p_match:
+            parts.append(f"-p {p_match.group(1)}")
+        if targets:
+            parts.append(" ".join(targets))
+        return " ".join(parts) if parts else cmd[:80]
+
+    @staticmethod
     def compress_history(scan_history: list) -> str:
         """Serialize scan history to a compact one-line-per-depth dialect string.
 
@@ -224,16 +237,17 @@ class ToonDialect:
         Args:
             scan_history: List of scan-history entry dicts produced by
                           ReconesisEngine._update_scan_history(). Each entry has
-                          ``depth`` (int) and ``hosts`` (list of host summary dicts).
+                          ``depth`` (int), ``hosts`` (list of host summary dicts),
+                          and ``commands`` (list of nmap command strings).
 
         Returns:
             A multi-line string with a header row followed by one ``d<n>: ...`` line per
-            depth. Returns only the header if scan_history is empty.
+            depth plus a ``cmds:`` line listing previously run commands. Returns only the
+            header if scan_history is empty.
         """
         header = (
-            "History (T/C aliases: D=Database M=Mail R=Router F=Firewall "
-            "A=AD/LDAP J=Jump W=Web S=AppServer I=IoT N=NAS X=WinFS Z=DNS G=Generic "
-            "| C=CRITICAL H=HIGH M=MEDIUM L=LOW):\n"
+            "Previously scanned (T: D=Database M=Mail R=Router F=Firewall "
+            "A=AD/LDAP J=Jump W=Web S=AppServer I=IoT N=NAS X=WinFS Z=DNS G=Generic):\n"
         )
 
         recent = scan_history[-2:] if len(scan_history) > 2 else scan_history
@@ -247,10 +261,14 @@ class ToonDialect:
             host_parts = []
             for h in hosts:
                 t_alias = _TYPE_ALIAS.get(h.get("type", "Generic Host"), "G")
-                c_alias = _CRIT_ALIAS.get(h.get("criticality", "LOW"), "L")
                 ports   = ",".join(str(p) for p in h.get("ports", []))
-                host_parts.append(f"{h['ip']}/{t_alias}/{c_alias}/{ports}")
+                host_parts.append(f"{h['ip']}/{t_alias}/{ports}")
             depth_lines.append(f"d{n}: " + " | ".join(host_parts))
+
+            commands = entry.get("commands", [])
+            if commands:
+                cmd_summary = "; ".join(ToonDialect._summarize_cmd(c) for c in commands)
+                depth_lines.append(f"  cmds: {cmd_summary}")
 
         return header + "\n".join(depth_lines)
 

@@ -295,13 +295,14 @@ class TestCompressHistory:
 
     def test_empty_list_returns_header_only(self):
         result = ToonDialect.compress_history([])
-        assert "History" in result
-        assert "aliases" in result
+        assert "Previously scanned" in result
+        assert "D=Database" in result
 
     def test_single_depth_format(self):
+        # Criticality is no longer included in history — format is ip/type/ports
         history = [_history_entry(1, [_hhost()])]
         result = ToonDialect.compress_history(history)
-        assert "d1: 10.0.0.1/D/C/5432,22" in result
+        assert "d1: 10.0.0.1/D/5432,22" in result
 
     def test_two_depths(self):
         history = [
@@ -335,13 +336,14 @@ class TestCompressHistory:
         assert "d1:" not in result
 
     def test_multiple_hosts_pipe_separated(self):
+        # No criticality code — format is ip/type/ports
         history = [_history_entry(1, [
             _hhost("10.0.0.1"),
             _hhost("10.0.0.2", type_="Web Server", crit="HIGH"),
         ])]
         result = ToonDialect.compress_history(history)
-        assert "10.0.0.1/D/C" in result
-        assert "10.0.0.2/W/H" in result
+        assert "10.0.0.1/D/" in result
+        assert "10.0.0.2/W/" in result
         assert " | " in result
 
     def test_ports_bare_csv_integers(self):
@@ -354,21 +356,22 @@ class TestCompressHistory:
             _hhost(type_="Mail Server", crit="CRITICAL"),
         ])]
         result = ToonDialect.compress_history(history)
-        assert "/M/C/" in result
+        assert "/M/" in result
 
-    def test_criticality_aliases_applied(self):
-        history = [_history_entry(1, [
-            _hhost(crit="HIGH"),
-        ])]
+    def test_criticality_not_in_history(self):
+        # Criticality codes (C/H/M/L) are intentionally omitted from history context
+        history = [_history_entry(1, [_hhost(crit="HIGH")])]
         result = ToonDialect.compress_history(history)
-        assert "/D/H/" in result
+        # Type alias D is present; criticality alias H should NOT appear as /D/H/
+        assert "/D/H/" not in result
+        assert "C=CRITICAL" not in result
 
     def test_decoder_header_present(self):
         history = [_history_entry(1, [_hhost()])]
         result = ToonDialect.compress_history(history)
-        # Header should contain alias legend
+        # Header should contain type alias legend but NOT criticality legend
         assert "D=Database" in result
-        assert "C=CRITICAL" in result
+        assert "C=CRITICAL" not in result
 
     def test_depth_lines_newline_separated(self):
         history = [
@@ -379,6 +382,20 @@ class TestCompressHistory:
         lines = result.splitlines()
         d_lines = [l for l in lines if l.startswith("d")]
         assert len(d_lines) == 2
+
+    def test_commands_rendered_compactly(self):
+        entry = _history_entry(1, [_hhost()])
+        entry["commands"] = ["nmap -sS -p 22,80 172.20.0.0/24 -oX -"]
+        result = ToonDialect.compress_history([entry])
+        assert "cmds:" in result
+        assert "-p 22,80" in result
+        assert "172.20.0.0/24" in result
+
+    def test_no_commands_key_omits_cmds_line(self):
+        # Entries without "commands" (e.g. old format) produce no cmds: line
+        history = [_history_entry(1, [_hhost()])]
+        result = ToonDialect.compress_history(history)
+        assert "cmds:" not in result
 
 
 # ── render_with_gaps ────────────────────────────────────────────────────────

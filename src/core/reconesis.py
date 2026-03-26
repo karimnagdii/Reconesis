@@ -366,7 +366,7 @@ class ReconesisEngine:
                             "cvss": exploit.get("cvss", 0),
                             "source": exploit.get("source", ""),
                         }
-            cves = list(seen.values())
+            cves = [e for e in seen.values() if e["cvss"] >= 7.0]
             if cves:
                 self._emit("cves_found", {"ip": host["target"], "cves": cves})
                 self._log(f"  {host['target']}: {len(cves)} CVE(s) found")

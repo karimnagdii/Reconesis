@@ -4,6 +4,7 @@ import time
 import requests
 import json
 import logging
+from collections import deque
 from src.utils.config import Config
 from src.utils.toon_dialect import ToonDialect
 from src.utils.exceptions import ReconesisAPIError, ReconesisParseError
@@ -91,13 +92,16 @@ DEPTH1_SYSTEM_PROMPT = (
     "Mail Servers, DNS Servers, NAS Appliances, Windows File Servers, Jump Hosts, "
     "Web Servers, Application Servers. "
     "Do NOT use -p- or --top-ports. Select explicit port lists with -p.\n\n"
+    "CONSTRAINTS:\n"
+    "- Do NOT combine -sS and -sU in the same command — run TCP-only OR UDP-only per iteration.\n"
+    "- Do NOT add new_targets — always return \"new_targets\": [].\n"
+    "- Do NOT repeat ports that appear in 'Already scanned TCP/UDP ports' if provided.\n\n"
     "Reply ONLY with valid JSON — no prose, no code fences:\n"
     '{\n  "command": "<nmap string>",\n'
     '  "rationale": "<one sentence>",\n'
     '  "continue": <true|false>,\n'
-    '  "new_targets": ["<ip or cidr>", ...]\n}\n\n'
-    '"continue": false only when you have a complete network picture.\n'
-    '"new_targets": [] if no new scope hints found.'
+    '  "new_targets": []\n}\n\n'
+    '"continue": false only when you have a complete network picture.'
 )
 
 DEPTH2_SYSTEM_PROMPT = (
@@ -310,6 +314,9 @@ class GroqAgent:
         "Do NOT repeat the executive summary or asset inventory table."
     )
 
+    # Groq free-tier limit is 30 req/min; keep 2 in reserve for safety
+    _RPM_LIMIT = 28
+
     def __init__(self, event_callback=None):
         self.logger = logging.getLogger("GroqAgent")
         self.api_url = Config.GROQ_API_URL
@@ -319,6 +326,33 @@ class GroqAgent:
         self._call_id = 1
         # PERF: connection reuse — eliminates per-call TCP+TLS handshake (M-5)
         self._session = requests.Session()
+        # Proactive rate limiting: sliding window of call timestamps
+        self._call_timestamps: deque = deque()
+
+    def _throttle(self) -> None:
+        """Block until making another API call stays within _RPM_LIMIT req/min.
+
+        Trims timestamps older than 60 s from the sliding window, then sleeps
+        only as long as needed for the oldest entry to fall out when the window
+        is full. No sleep at all when we are well under the limit.
+        """
+        now = time.monotonic()
+        # Drop timestamps outside the 60-second window
+        while self._call_timestamps and now - self._call_timestamps[0] >= 60:
+            self._call_timestamps.popleft()
+
+        if len(self._call_timestamps) >= self._RPM_LIMIT:
+            wait = 60 - (now - self._call_timestamps[0]) + 0.1  # 0.1 s buffer
+            if wait > 0:
+                self.logger.info(f"Rate limit: waiting {wait:.1f}s before next API call")
+                self._emit("rate_limit", {"wait_seconds": round(wait, 1)})
+                time.sleep(wait)
+            # Re-trim after sleeping
+            now = time.monotonic()
+            while self._call_timestamps and now - self._call_timestamps[0] >= 60:
+                self._call_timestamps.popleft()
+
+        self._call_timestamps.append(time.monotonic())
 
     def _build_history_context(self, previous_findings: list) -> str:
         """Build the compressed history context block appended to LLM user prompts.
@@ -547,6 +581,7 @@ class GroqAgent:
         for stronger instruction-following.
         Returns (content, finish_reason) tuple.
         """
+        self._throttle()
         current_id = self._call_id
         self._call_id += 1   # always advance — counter must not get stuck on exception
         self._emit("ai_prompt", {
@@ -585,6 +620,24 @@ class GroqAgent:
                 "phase": phase,
                 "raw_response": result,
             })
+            # Header-driven proactive throttle: if Groq says we're nearly out, pause
+            remaining = response.headers.get("x-ratelimit-remaining-requests")
+            reset_ms = response.headers.get("x-ratelimit-reset-requests")
+            if isinstance(remaining, str) and isinstance(reset_ms, str):
+                try:
+                    if int(remaining) <= 2:
+                        # reset header is like "1s" or "500ms"
+                        m = re.match(r"(\d+\.?\d*)s|(\d+)ms", reset_ms)
+                        if m:
+                            wait = float(m.group(1)) if m.group(1) else int(m.group(2)) / 1000.0
+                            self.logger.info(
+                                f"Rate limit header: {remaining} req remaining — "
+                                f"pausing {wait:.1f}s until reset"
+                            )
+                            self._emit("rate_limit", {"wait_seconds": round(wait, 1)})
+                            time.sleep(wait)
+                except (ValueError, AttributeError, TypeError):
+                    pass
             return result, finish_reason
         except requests.exceptions.HTTPError as e:
             status_code = e.response.status_code if e.response else "unknown"
@@ -718,6 +771,13 @@ class GroqAgent:
         purpose = context.get("depth_purpose", "")
         history_block = self._build_history_context(context.get("scan_history", []))
         user_content = f"{purpose}\n\n{toon_block}{history_block}"
+
+        # Depth1: tell LLM which ports are already covered so it picks new ones
+        if depth == 1:
+            scanned_ports = context.get("scanned_ports", set())
+            if scanned_ports:
+                ports_str = ",".join(str(p) for p in sorted(scanned_ports))
+                user_content += f"\n\nAlready scanned TCP ports (do NOT repeat): {ports_str}"
 
         try:
             result, _ = self._query_groq(
