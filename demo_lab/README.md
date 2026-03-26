@@ -5,6 +5,9 @@ Simulates the internal network of a fictional 50-person law firm. 18 containers 
 ## Quick Start
 
 ```bash
+# First time only — build the samba base image:
+docker build -f Dockerfile.samba -t demo-samba:latest .
+# Start:
 docker-compose up -d
 # Scan:
 sudo venv/bin/python main.py --target 172.20.0.0/24
@@ -48,11 +51,12 @@ After `docker-compose up -d`, a Reconesis scan of `172.20.0.0/24` should produce
 
 ## Architecture Notes
 
-- `dc01`: `osixia/openldap:1.5.0` for real LDAP on 389/636; socat stubs for 53, 88, 135, 445, 3268 via custom entrypoint wrapper.
+- `dc01`: `alpine:3.19` with socat stubs for all AD ports (53, 88, 135, 389, 445, 636, 3268). Replaced `osixia/openldap:1.5.0` — that image is Debian Buster-based (EOL) and can no longer install packages.
 - `casedb`: real PostgreSQL — nmap accurately detects service and product.
-- `files01`, `nas01`: real Samba on 445; socat stubs for MSRPC/NetBIOS/DSM ports.
+- `files01`, `nas01`: `demo-samba:latest` (Alpine + samba + socat pre-baked). Real Samba on 445/139; socat stubs for MSRPC (135), NetBIOS (139 on files01), and Synology DSM (5000/5001 on nas01). Pre-built image avoids `apk add samba` race condition on container startup.
 - `jumpbox`: real OpenSSH on 2222 only.
 - `appserver`: real Tomcat on 8080; socat stub with Tomcat banner on 8443.
 - `devbox`: real OpenSSH on 22; socat stub (Node.js banner) on 3000.
 - `web01`: nginx with self-signed cert (cert generated at container start).
-- All other ports: socat stubs emitting product-string HTTP/SMTP/SIP banners.
+- All other ports: socat stubs emitting product-string HTTP/SMTP/SIP banners. Commands use `command: [sh, -c, |...]` list form (not `command: >`) to avoid nested-quote mangling of `EXEC:'printf "..."'` arguments.
+- **Build prerequisite**: run `docker build -f Dockerfile.samba -t demo-samba:latest .` once before `docker-compose up -d`.

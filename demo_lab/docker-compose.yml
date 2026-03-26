@@ -14,15 +14,21 @@ services:
   # dc01, casedb, mail01, ipcam01 — static scorer and LLM agree
 
   dc01:
-    image: osixia/openldap:1.5.0
+    image: alpine:3.19
     container_name: dc01
-    environment:
-      LDAP_ORGANISATION: "Meridian Legal LLP"
-      LDAP_DOMAIN: "meridian-legal.local"
-      LDAP_ADMIN_PASSWORD: "Admin1234"
-    volumes:
-      - ./dc01/entrypoint.sh:/entrypoint-wrapper.sh:ro
-    entrypoint: ["/bin/bash", "/entrypoint-wrapper.sh"]
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache socat &&
+        socat TCP-LISTEN:53,fork,reuseaddr  EXEC:'printf "DNS-ready\r\n"' &
+        socat TCP-LISTEN:88,fork,reuseaddr  EXEC:'printf "Kerberos v5 ready\r\n"' &
+        socat TCP-LISTEN:135,fork,reuseaddr EXEC:'printf "MSRPC endpoint mapper ready\r\n"' &
+        socat TCP-LISTEN:389,fork,reuseaddr EXEC:'printf "0\r\n"' &
+        socat TCP-LISTEN:445,fork,reuseaddr EXEC:'printf "SMB signing: required\r\n"' &
+        socat TCP-LISTEN:636,fork,reuseaddr EXEC:'printf "0\r\n"' &
+        socat TCP-LISTEN:3268,fork,reuseaddr EXEC:'printf "LDAP Global Catalog ready\r\n"' &
+        tail -f /dev/null
     networks:
       recon_net:
         ipv4_address: 172.20.0.10
@@ -41,17 +47,16 @@ services:
   mail01:
     image: alpine:3.19
     container_name: mail01
-    command: >
-      sh -c "apk add --no-cache socat &&
-             socat TCP-LISTEN:25,fork,reuseaddr
-               EXEC:'printf \"220 mail.meridian-legal.local ESMTP Postfix\r\n\"' &
-             socat TCP-LISTEN:143,fork,reuseaddr
-               EXEC:'printf \"* OK [CAPABILITY IMAP4rev1] Dovecot ready\r\n\"' &
-             socat TCP-LISTEN:587,fork,reuseaddr
-               EXEC:'printf \"220 mail.meridian-legal.local ESMTP Submission\r\n\"' &
-             socat TCP-LISTEN:993,fork,reuseaddr
-               EXEC:'printf \"* OK Dovecot IMAP ready\r\n\"' &
-             tail -f /dev/null"
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache socat &&
+        socat TCP-LISTEN:25,fork,reuseaddr  EXEC:'printf "220 mail.meridian-legal.local ESMTP Postfix\r\n"' &
+        socat TCP-LISTEN:143,fork,reuseaddr EXEC:'printf "* OK [CAPABILITY IMAP4rev1] Dovecot ready\r\n"' &
+        socat TCP-LISTEN:587,fork,reuseaddr EXEC:'printf "220 mail.meridian-legal.local ESMTP Submission\r\n"' &
+        socat TCP-LISTEN:993,fork,reuseaddr EXEC:'printf "* OK Dovecot IMAP ready\r\n"' &
+        tail -f /dev/null
     networks:
       recon_net:
         ipv4_address: 172.20.0.12
@@ -59,15 +64,15 @@ services:
   ipcam01:
     image: alpine:3.19
     container_name: ipcam01
-    command: >
-      sh -c "apk add --no-cache socat &&
-             socat TCP-LISTEN:554,fork,reuseaddr
-               EXEC:'printf \"RTSP/1.0 200 OK\r\nServer: HikVision-IP-Camera/v5.4.5\r\nCSeq: 1\r\n\r\n\"' &
-             socat TCP-LISTEN:8000,fork,reuseaddr
-               EXEC:'printf \"HTTP/1.1 200 OK\r\nServer: HikVision-IP-Camera/v5.4.5\r\nContent-Length: 0\r\n\r\n\"' &
-             socat TCP-LISTEN:8899,fork,reuseaddr
-               EXEC:'printf \"HTTP/1.1 200 OK\r\nServer: HikVision-ONVIF\r\nContent-Length: 0\r\n\r\n\"' &
-             tail -f /dev/null"
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache socat &&
+        socat TCP-LISTEN:554,fork,reuseaddr  EXEC:'printf "RTSP/1.0 200 OK\r\nServer: HikVision-IP-Camera/v5.4.5\r\nCSeq: 1\r\n\r\n"' &
+        socat TCP-LISTEN:8000,fork,reuseaddr EXEC:'printf "HTTP/1.1 200 OK\r\nServer: HikVision-IP-Camera/v5.4.5\r\nContent-Length: 0\r\n\r\n"' &
+        socat TCP-LISTEN:8899,fork,reuseaddr EXEC:'printf "HTTP/1.1 200 OK\r\nServer: HikVision-ONVIF\r\nContent-Length: 0\r\n\r\n"' &
+        tail -f /dev/null
     networks:
       recon_net:
         ipv4_address: 172.20.0.13
@@ -77,18 +82,18 @@ services:
   # "Significant attack surface but not core infrastructure."
 
   files01:
-    image: alpine:3.19
+    image: demo-samba:latest
     container_name: files01
-    command: >
-      sh -c "apk add --no-cache samba socat &&
-             mkdir -p /srv/files &&
-             adduser -D -H fileuser &&
-             cp /smb/winfs-smb.conf /etc/samba/smb.conf &&
-             socat TCP-LISTEN:135,fork,reuseaddr
-               EXEC:'printf \"MSRPC endpoint mapper ready\r\n\"' &
-             socat TCP-LISTEN:139,fork,reuseaddr
-               EXEC:'printf \"NetBIOS session ready\r\n\"' &
-             smbd --foreground --no-process-group"
+    command:
+      - sh
+      - -c
+      - |
+        mkdir -p /srv/files &&
+        adduser -D -H fileuser &&
+        cp /smb/winfs-smb.conf /etc/samba/smb.conf &&
+        socat TCP-LISTEN:135,fork,reuseaddr EXEC:'printf "MSRPC endpoint mapper ready\r\n"' &
+        socat TCP-LISTEN:139,fork,reuseaddr EXEC:'printf "NetBIOS session ready\r\n"' &
+        smbd --foreground --no-process-group
     volumes:
       - ./samba/winfs-smb.conf:/smb/winfs-smb.conf:ro
     networks:
@@ -98,13 +103,15 @@ services:
   jumpbox:
     image: alpine:3.19
     container_name: jumpbox
-    command: >
-      sh -c "apk add --no-cache openssh &&
-             ssh-keygen -A &&
-             printf 'Port 2222\nPermitRootLogin yes\nPasswordAuthentication yes\n'
-               > /etc/ssh/sshd_config &&
-             echo 'root:jumppass' | chpasswd &&
-             /usr/sbin/sshd -D"
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache openssh &&
+        ssh-keygen -A &&
+        printf 'Port 2222\nPermitRootLogin yes\nPasswordAuthentication yes\n' > /etc/ssh/sshd_config &&
+        echo 'root:jumppass' | chpasswd &&
+        /usr/sbin/sshd -D
     networks:
       recon_net:
         ipv4_address: 172.20.0.21
@@ -112,27 +119,29 @@ services:
   appserver:
     image: tomcat:9.0-jdk17-temurin
     container_name: appserver
-    command: >
-      sh -c "apt-get update -qq && apt-get install -y -qq socat &&
-             socat TCP-LISTEN:8443,fork,reuseaddr
-               EXEC:'printf \"HTTP/1.1 200 OK\r\nServer: Apache Tomcat/9.0.65\r\nContent-Length: 0\r\n\r\n\"' &
-             catalina.sh run"
+    command:
+      - sh
+      - -c
+      - |
+        apt-get update -qq && apt-get install -y -qq socat &&
+        socat TCP-LISTEN:8443,fork,reuseaddr EXEC:'printf "HTTP/1.1 200 OK\r\nServer: Apache Tomcat/9.0.65\r\nContent-Length: 0\r\n\r\n"' &
+        catalina.sh run
     networks:
       recon_net:
         ipv4_address: 172.20.0.22
 
   nas01:
-    image: alpine:3.19
+    image: demo-samba:latest
     container_name: nas01
-    command: >
-      sh -c "apk add --no-cache samba socat &&
-             mkdir -p /srv/nas &&
-             cp /smb/nas-smb.conf /etc/samba/smb.conf &&
-             socat TCP-LISTEN:5000,fork,reuseaddr
-               EXEC:'printf \"HTTP/1.1 200 OK\r\nServer: Synology DSM\r\nContent-Length: 0\r\n\r\n\"' &
-             socat TCP-LISTEN:5001,fork,reuseaddr
-               EXEC:'printf \"HTTP/1.1 200 OK\r\nServer: Synology DSM HTTPS\r\nContent-Length: 0\r\n\r\n\"' &
-             smbd --foreground --no-process-group"
+    command:
+      - sh
+      - -c
+      - |
+        mkdir -p /srv/nas &&
+        cp /smb/nas-smb.conf /etc/samba/smb.conf &&
+        socat TCP-LISTEN:5000,fork,reuseaddr EXEC:'printf "HTTP/1.1 200 OK\r\nServer: Synology DSM\r\nContent-Length: 0\r\n\r\n"' &
+        socat TCP-LISTEN:5001,fork,reuseaddr EXEC:'printf "HTTP/1.1 200 OK\r\nServer: Synology DSM HTTPS\r\nContent-Length: 0\r\n\r\n"' &
+        smbd --foreground --no-process-group
     volumes:
       - ./samba/nas-smb.conf:/smb/nas-smb.conf:ro
     networks:
@@ -148,14 +157,14 @@ services:
     container_name: web01
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
-    command: >
-      sh -c "apk add --no-cache openssl &&
-             mkdir -p /etc/nginx/ssl &&
-             openssl req -x509 -nodes -days 365 -newkey rsa:2048
-               -keyout /etc/nginx/ssl/key.pem
-               -out /etc/nginx/ssl/cert.pem
-               -subj '/CN=meridian-legal.local' 2>/dev/null &&
-             nginx -g 'daemon off;'"
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache openssl &&
+        mkdir -p /etc/nginx/ssl &&
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/nginx/ssl/key.pem -out /etc/nginx/ssl/cert.pem -subj '/CN=meridian-legal.local' 2>/dev/null &&
+        nginx -g 'daemon off;'
     networks:
       recon_net:
         ipv4_address: 172.20.0.30
@@ -163,16 +172,17 @@ services:
   devbox:
     image: alpine:3.19
     container_name: devbox
-    command: >
-      sh -c "apk add --no-cache openssh socat &&
-             ssh-keygen -A &&
-             printf 'PermitRootLogin yes\nPasswordAuthentication yes\n'
-               > /etc/ssh/sshd_config &&
-             echo 'root:devpass' | chpasswd &&
-             /usr/sbin/sshd &
-             socat TCP-LISTEN:3000,fork,reuseaddr
-               EXEC:'printf \"HTTP/1.1 200 OK\r\nServer: Node.js Dev Server\r\nContent-Length: 0\r\n\r\n\"' &
-             tail -f /dev/null"
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache openssh socat &&
+        ssh-keygen -A &&
+        printf 'PermitRootLogin yes\nPasswordAuthentication yes\n' > /etc/ssh/sshd_config &&
+        echo 'root:devpass' | chpasswd &&
+        /usr/sbin/sshd &
+        socat TCP-LISTEN:3000,fork,reuseaddr EXEC:'printf "HTTP/1.1 200 OK\r\nServer: Node.js Dev Server\r\nContent-Length: 0\r\n\r\n"' &
+        tail -f /dev/null
     networks:
       recon_net:
         ipv4_address: 172.20.0.31
@@ -180,11 +190,13 @@ services:
   monitor01:
     image: alpine:3.19
     container_name: monitor01
-    command: >
-      sh -c "apk add --no-cache socat &&
-             socat TCP-LISTEN:80,fork,reuseaddr
-               EXEC:'printf \"HTTP/1.1 200 OK\r\nServer: Nagios Core/4.4.6\r\nContent-Length: 0\r\n\r\n\"' &
-             tail -f /dev/null"
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache socat &&
+        socat TCP-LISTEN:80,fork,reuseaddr EXEC:'printf "HTTP/1.1 200 OK\r\nServer: Nagios Core/4.4.6\r\nContent-Length: 0\r\n\r\n"' &
+        tail -f /dev/null
     networks:
       recon_net:
         ipv4_address: 172.20.0.32
@@ -213,11 +225,13 @@ services:
   ws03:
     image: alpine:3.19
     container_name: ws03
-    command: >
-      sh -c "apk add --no-cache socat &&
-             socat TCP-LISTEN:3389,fork,reuseaddr
-               EXEC:'printf \"RDP ready\r\n\"' &
-             tail -f /dev/null"
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache socat &&
+        socat TCP-LISTEN:3389,fork,reuseaddr EXEC:'printf "RDP ready\r\n"' &
+        tail -f /dev/null
     networks:
       recon_net:
         ipv4_address: 172.20.0.42
@@ -225,13 +239,14 @@ services:
   printer01:
     image: alpine:3.19
     container_name: printer01
-    command: >
-      sh -c "apk add --no-cache socat &&
-             socat TCP-LISTEN:9100,fork,reuseaddr
-               EXEC:'printf \"HP JetDirect\r\n\"' &
-             socat TCP-LISTEN:631,fork,reuseaddr
-               EXEC:'printf \"HTTP/1.1 200 OK\r\nServer: CUPS/2.4.0\r\nContent-Length: 0\r\n\r\n\"' &
-             tail -f /dev/null"
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache socat &&
+        socat TCP-LISTEN:9100,fork,reuseaddr EXEC:'printf "HP JetDirect\r\n"' &
+        socat TCP-LISTEN:631,fork,reuseaddr  EXEC:'printf "HTTP/1.1 200 OK\r\nServer: CUPS/2.4.0\r\nContent-Length: 0\r\n\r\n"' &
+        tail -f /dev/null
     networks:
       recon_net:
         ipv4_address: 172.20.0.50
@@ -239,15 +254,15 @@ services:
   printer02:
     image: alpine:3.19
     container_name: printer02
-    command: >
-      sh -c "apk add --no-cache socat &&
-             socat TCP-LISTEN:9100,fork,reuseaddr
-               EXEC:'printf \"HP JetDirect\r\n\"' &
-             socat TCP-LISTEN:631,fork,reuseaddr
-               EXEC:'printf \"HTTP/1.1 200 OK\r\nServer: CUPS/2.4.0\r\nContent-Length: 0\r\n\r\n\"' &
-             socat TCP-LISTEN:80,fork,reuseaddr
-               EXEC:'printf \"HTTP/1.1 200 OK\r\nServer: Xerox WorkCentre\r\nContent-Length: 0\r\n\r\n\"' &
-             tail -f /dev/null"
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache socat &&
+        socat TCP-LISTEN:9100,fork,reuseaddr EXEC:'printf "HP JetDirect\r\n"' &
+        socat TCP-LISTEN:631,fork,reuseaddr  EXEC:'printf "HTTP/1.1 200 OK\r\nServer: CUPS/2.4.0\r\nContent-Length: 0\r\n\r\n"' &
+        socat TCP-LISTEN:80,fork,reuseaddr   EXEC:'printf "HTTP/1.1 200 OK\r\nServer: Xerox WorkCentre\r\nContent-Length: 0\r\n\r\n"' &
+        tail -f /dev/null
     networks:
       recon_net:
         ipv4_address: 172.20.0.51
@@ -255,11 +270,13 @@ services:
   voip01:
     image: alpine:3.19
     container_name: voip01
-    command: >
-      sh -c "apk add --no-cache socat &&
-             socat TCP-LISTEN:5060,fork,reuseaddr
-               EXEC:'printf \"SIP/2.0 200 OK\r\nContent-Length: 0\r\n\r\n\"' &
-             tail -f /dev/null"
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache socat &&
+        socat TCP-LISTEN:5060,fork,reuseaddr EXEC:'printf "SIP/2.0 200 OK\r\nContent-Length: 0\r\n\r\n"' &
+        tail -f /dev/null
     networks:
       recon_net:
         ipv4_address: 172.20.0.60
@@ -267,11 +284,13 @@ services:
   ups01:
     image: alpine:3.19
     container_name: ups01
-    command: >
-      sh -c "apk add --no-cache socat &&
-             socat TCP-LISTEN:80,fork,reuseaddr
-               EXEC:'printf \"HTTP/1.1 200 OK\r\nServer: APC Web Management\r\nContent-Length: 0\r\n\r\n\"' &
-             tail -f /dev/null"
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache socat &&
+        socat TCP-LISTEN:80,fork,reuseaddr EXEC:'printf "HTTP/1.1 200 OK\r\nServer: APC Web Management\r\nContent-Length: 0\r\n\r\n"' &
+        tail -f /dev/null
     networks:
       recon_net:
         ipv4_address: 172.20.0.61
